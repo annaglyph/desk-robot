@@ -120,9 +120,17 @@
   button.active { background: var(--amber); color: var(--void); border-color: var(--amber); }
   button.astro:hover { border-color: var(--astro); color: var(--astro); }
   button:disabled { opacity: .45; cursor: default; }
+  .face-card { container-type: inline-size; }
+  .face-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(128px, 38%, 220px); gap: 12px 14px; align-items: center; }
   .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
   .faces button { min-width: 0; padding-left: 6px; padding-right: 6px; }
   .faces button { text-transform: capitalize; }
+  .face-preview { display: block; width: 100%; height: auto; aspect-ratio: 2 / 1; background: #000; border: 1px solid var(--line-strong); border-radius: 4px;
+                  image-rendering: crisp-edges; image-rendering: pixelated; }
+  @container (max-width: 250px) {
+    .face-layout { grid-template-columns: 1fr; }
+    .face-preview { order: -1; width: min(100%, 220px); justify-self: center; }
+  }
   input[type=text] { flex: 1; min-width: 120px; font: 14px var(--body); color: var(--ink); background: #090c13; border: 1px solid var(--line-strong); border-radius: 4px; padding: 8px 10px; }
   input[type=text]::placeholder { color: var(--muted); }
   .hint { margin: 8px 0 0; font: 12px var(--body); color: var(--muted); }
@@ -186,9 +194,12 @@
           <button id="trackbtn" data-act="track">Follow my face</button>
         </div>
       </div>
-      <div class="card">
+      <div class="card face-card">
         <h2 class="label"><span>Face</span></h2>
-        <div class="faces" id="faces"></div>
+        <div class="face-layout">
+          <div class="faces" id="faces"></div>
+          <canvas id="facepreview" class="face-preview" width="128" height="64" aria-label="{name}'s face"></canvas>
+        </div>
       </div>
       <div class="card">
         <h2 class="label"><span>Voice</span></h2>
@@ -264,6 +275,342 @@
     b.onclick = () => act("emotion", { name: e });
     faces.appendChild(b);
   }
+
+  // firmware/src/face.cpp is the source of truth for the physical OLED.
+  // This canvas is intentionally an approximation: the same seven presets and
+  // paint-then-carve eyes, eased on the firmware's 33 ms step, with local
+  // blinks and glances that are not synced to the ESP32.
+  const FACE_PRESETS = {
+    neutral:   { eyeW: 34, eyeH: 34, radius: 12, browSlant:  0, lowerLid:  0, upperLid:  0 },
+    happy:     { eyeW: 36, eyeH: 36, radius: 12, browSlant:  0, lowerLid: 16, upperLid:  0 },
+    sad:       { eyeW: 32, eyeH: 26, radius: 10, browSlant: -9, lowerLid:  0, upperLid:  4 },
+    angry:     { eyeW: 34, eyeH: 24, radius:  8, browSlant: 10, lowerLid:  0, upperLid:  0 },
+    surprised: { eyeW: 38, eyeH: 44, radius: 19, browSlant:  0, lowerLid:  0, upperLid:  0 },
+    sleepy:    { eyeW: 34, eyeH: 26, radius: 10, browSlant:  0, lowerLid:  0, upperLid: 14 },
+    thinking:  { eyeW: 30, eyeH: 30, radius: 11, browSlant:  0, lowerLid:  0, upperLid:  5 },
+  };
+  const ASLEEP_EYES = { eyeW: 30, eyeH: 3, radius: 1, browSlant: 0, lowerLid: 0, upperLid: 0 };
+  const FACE_KEYS = ["eyeW", "eyeH", "radius", "browSlant", "lowerLid", "upperLid"];
+  const OLED_W = 128, OLED_H = 64, EYE_GAP = 16;
+  const faceCanvas = $("facepreview");
+  const fctx = faceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  const face = {
+    cur: Object.assign({}, FACE_PRESETS.neutral),
+    emotion: "neutral", awake: true, speaking: false, primed: false,
+    blinkAmount: 0, blinkClosing: false, nextBlink: 0,
+    gazeX: 0, gazeY: 0, gazeTargetX: 0, gazeTargetY: 0, nextSaccade: 0,
+    pop: 0, squint: 0, nextSquint: 0,
+    tearY: -1, nextTear: 0, thinkDots: 0, nextDot: 0, jitterX: 0,
+    breath: 0, twitch: 0, nextTwitch: 0, nextZed: 0,
+    zeds: [0, 1, 2].map(() => ({ alive: false, x: 0, y: 0, age: 0 })),
+    mouth: 0, emotionSince: 0, frame: 0, now: 0,
+  };
+  const approach = (cur, target, factor) => cur + (target - cur) * factor;
+  const rand = (a, b) => a + Math.floor(Math.random() * (b - a));
+
+  function readFaceStatus() {
+    if (!status.emotion && !face.primed) return;
+    const name = FACE_PRESETS[status.emotion] ? status.emotion : face.emotion;
+    const awake = status.awake !== false;
+    const speaking = !!status.speaking;
+    if (!face.primed) {
+      face.primed = true;
+      face.emotion = name;
+      face.awake = awake;
+      face.speaking = speaking;
+      Object.assign(face.cur, awake ? FACE_PRESETS[name] : ASLEEP_EYES);
+      face.emotionSince = face.now - 1000; // don't replay a surprise mark for a face already showing
+      face.nextBlink = face.now + rand(2200, 6000);
+      face.nextSaccade = face.now + rand(1200, 4000);
+      face.nextSquint = face.now + rand(8000, 16000);
+      face.nextTear = face.now + 1500;
+      face.nextDot = face.now + 420;
+      if (!awake) face.nextZed = face.now + 800;
+      if (awake && name === "thinking") {
+        face.gazeX = face.gazeTargetX = 7;
+        face.gazeY = face.gazeTargetY = -5;
+      }
+      return;
+    }
+    face.speaking = speaking;
+    if (name !== face.emotion) {
+      face.pop = 1;
+      face.emotionSince = face.now;
+      face.tearY = -1;
+      face.nextTear = face.now + 1500;
+      face.thinkDots = 0;
+      face.nextDot = face.now + 420;
+      face.gazeTargetX = name === "thinking" ? 7 : 0;
+      face.gazeTargetY = name === "thinking" ? -5 : 0;
+      face.emotion = name;
+    }
+    if (awake !== face.awake) {
+      if (!awake) {
+        for (const z of face.zeds) z.alive = false;
+        face.nextZed = face.now + 800;
+        face.nextTwitch = face.now + rand(5000, 9000);
+        face.gazeTargetX = face.gazeTargetY = 0;
+      } else {
+        face.pop = 1;
+        face.blinkAmount = 0;
+        face.blinkClosing = false;
+      }
+      face.awake = awake;
+    }
+  }
+
+  function stepFace() {
+    face.now += 33;
+    face.frame++;
+    readFaceStatus();
+    if (!face.primed) return;
+    const goal = face.awake ? FACE_PRESETS[face.emotion] : ASLEEP_EYES;
+    const ease = face.awake ? 0.25 : 0.12;
+    for (const k of FACE_KEYS) face.cur[k] = approach(face.cur[k], goal[k], ease);
+    face.pop *= 0.82;
+    face.squint *= 0.85;
+    if (!face.awake) {
+      face.breath += 0.035;
+      face.blinkAmount = 0;
+      face.blinkClosing = false;
+      face.twitch *= 0.8;
+      if (face.now >= face.nextTwitch) {
+        face.twitch = 1;
+        face.nextTwitch = face.now + rand(6000, 12000);
+      }
+      if (face.now >= face.nextZed) {
+        for (const z of face.zeds) {
+          if (!z.alive) {
+            z.alive = true; z.age = 0;
+            z.x = OLED_W / 2 + EYE_GAP / 2 + face.cur.eyeW + 2;
+            z.y = OLED_H / 2 - 6;
+            break;
+          }
+        }
+        face.nextZed = face.now + rand(1100, 1700);
+      }
+      for (const z of face.zeds) {
+        if (!z.alive) continue;
+        z.age += 0.012; z.y -= 0.32; z.x += 0.22;
+        if (z.age >= 1 || z.y < -12) z.alive = false;
+      }
+      face.gazeX = approach(face.gazeX, 0, 0.2);
+      face.gazeY = approach(face.gazeY, 0, 0.2);
+      face.mouth = approach(face.mouth, 0, 0.3);
+      return;
+    }
+    if (face.blinkClosing) {
+      face.blinkAmount += 0.45;
+      if (face.blinkAmount >= 1) { face.blinkAmount = 1; face.blinkClosing = false; }
+    } else if (face.blinkAmount > 0) {
+      face.blinkAmount = Math.max(0, face.blinkAmount - 0.28);
+    }
+    if (face.now >= face.nextBlink) {
+      face.blinkClosing = true;
+      face.nextBlink = face.now + rand(2200, 6000);
+      if (rand(0, 100) < 20) face.nextBlink = face.now + 400;
+    }
+    if (face.now >= face.nextSaccade && face.emotion !== "thinking") {
+      face.gazeTargetX = rand(-8, 9);
+      face.gazeTargetY = rand(-4, 5);
+      if (rand(0, 100) < 40) face.gazeTargetX = face.gazeTargetY = 0;
+      face.nextSaccade = face.now + rand(1200, 4000);
+    }
+    if (face.now >= face.nextSquint && face.emotion === "neutral") {
+      face.squint = 1;
+      face.nextSquint = face.now + rand(8000, 16000);
+    }
+    if (face.emotion === "sad") {
+      if (face.tearY < 0 && face.now >= face.nextTear) face.tearY = 0;
+      if (face.tearY >= 0) {
+        face.tearY += 0.7;
+        if (face.tearY > OLED_H) { face.tearY = -1; face.nextTear = face.now + rand(2500, 5000); }
+      }
+    }
+    if (face.emotion === "thinking" && face.now >= face.nextDot) {
+      face.thinkDots = (face.thinkDots + 1) % 4;
+      face.nextDot = face.now + 420;
+    }
+    face.jitterX = (face.emotion === "angry" && face.frame % 3 === 0) ? rand(-1, 2) : 0;
+    const mouthGoal = face.speaking ? 0.7 : 0;
+    face.mouth = approach(face.mouth, mouthGoal, face.speaking ? 0.5 : 0.3);
+    face.gazeX = approach(face.gazeX, face.gazeTargetX, 0.35);
+    face.gazeY = approach(face.gazeY, face.gazeTargetY, 0.35);
+  }
+
+  function fillRound(x, y, w, h, r) {
+    w = Math.trunc(w); h = Math.trunc(h);
+    if (w < 1 || h < 1) return;
+    x = Math.trunc(x); y = Math.trunc(y);
+    r = Math.max(0, Math.min(Math.trunc(r), Math.floor(Math.min(w, h) / 2)));
+    fctx.beginPath();
+    fctx.moveTo(x + r, y);
+    fctx.arcTo(x + w, y, x + w, y + h, r);
+    fctx.arcTo(x + w, y + h, x, y + h, r);
+    fctx.arcTo(x, y + h, x, y, r);
+    fctx.arcTo(x, y, x + w, y, r);
+    fctx.closePath();
+    fctx.fill();
+  }
+  function fillDisc(cx, cy, r) {
+    fctx.beginPath();
+    fctx.arc(Math.trunc(cx), Math.trunc(cy), Math.max(0, Math.trunc(r)), 0, Math.PI * 2);
+    fctx.fill();
+  }
+  function drawPxLine(x0, y0, x1, y1) {
+    x0 = Math.trunc(x0); y0 = Math.trunc(y0); x1 = Math.trunc(x1); y1 = Math.trunc(y1);
+    const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      fctx.fillRect(x0, y0, 1, 1);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; x0 += sx; }
+      if (e2 < dx) { err += dx; y0 += sy; }
+    }
+  }
+  function drawEye(cx, cy, isLeft, hScale) {
+    let h = face.cur.eyeH * hScale * (1 - face.blinkAmount);
+    if (h < 2) h = 2;
+    const w = face.cur.eyeW;
+    const x = cx - Math.trunc(w / 2);
+    const y = cy - Math.trunc(h / 2);
+    let radius = Math.min(Math.trunc(face.cur.radius), Math.trunc(Math.min(w, h) / 2 - 1));
+    if (radius < 0) radius = 0;
+    fctx.fillStyle = "#fff";
+    fillRound(x, y, w, h, radius);
+    fctx.fillStyle = "#000";
+    const slant = face.cur.browSlant;
+    if (Math.abs(slant) > 0.5) {
+      const depth = Math.trunc(Math.abs(slant));
+      const cutRight = isLeft ? slant > 0 : slant < 0;
+      const x0 = x - 1, x1 = x + Math.trunc(w) + 1;
+      fctx.beginPath();
+      fctx.moveTo(x0, y - 1);
+      fctx.lineTo(x1, y - 1);
+      fctx.lineTo(cutRight ? x1 : x0, y + depth);
+      fctx.closePath();
+      fctx.fill();
+    }
+    if (face.cur.lowerLid > 0.5) {
+      const lidR = Math.trunc(w);
+      fillDisc(cx, y + Math.trunc(h) + lidR - Math.trunc(face.cur.lowerLid), lidR);
+    }
+    if (face.cur.upperLid > 0.5) {
+      fctx.fillRect(x - 1, y - 1, Math.trunc(w) + 2, Math.trunc(face.cur.upperLid) + 1);
+    }
+    if (h > 12 && face.awake) {
+      const gx = x + Math.trunc(w * 0.22) + Math.trunc(face.gazeX * 0.3);
+      const gy = y + Math.trunc(h * 0.18) + Math.trunc(face.cur.upperLid);
+      fctx.fillRect(gx, gy, w > 34 ? 4 : 3, w > 34 ? 4 : 3);
+    }
+  }
+  function drawMouth(cx, cy) {
+    if (face.mouth < 0.05) return;
+    const mh = 2 + Math.trunc(face.mouth * 9);
+    const mw = 20 + Math.trunc(face.mouth * 8);
+    let my = cy + Math.trunc(face.cur.eyeH / 2) + 4;
+    if (my + mh > OLED_H - 1) my = OLED_H - 1 - mh;
+    fctx.fillStyle = "#fff";
+    fillRound(cx - Math.trunc(mw / 2), my, mw, mh, Math.min(Math.trunc(mh / 2), 4));
+    if (mh > 6) {
+      fctx.fillStyle = "#000";
+      fillRound(cx - Math.trunc(mw / 2) + 3, my + 2, mw - 6, mh - 4, 2);
+    }
+  }
+  function drawMark(x, y) {
+    fctx.fillStyle = "#fff";
+    fctx.fillRect(x, y - 16, 2, 11);
+    fctx.fillRect(x, y - 3, 2, 2);
+  }
+  function drawZed(x, y, size) {
+    const w = Math.max(4, Math.round(size * 0.62));
+    const t = size > 12 ? 2 : 1;
+    fctx.fillStyle = "#fff";
+    fctx.fillRect(x, y - size, w, t);
+    fctx.fillRect(x, y - t, w, t);
+    for (let i = 0; i < size; i++) {
+      const px = x + Math.trunc((size - 1 - i) * Math.max(1, w - t) / Math.max(1, size - 1));
+      fctx.fillRect(px, y - size + i, t, 1);
+    }
+  }
+  function drawFace() {
+    if (!face.primed) return;
+    fctx.fillStyle = "#000";
+    fctx.fillRect(0, 0, OLED_W, OLED_H);
+    const bob = face.awake ? -face.mouth * 2 : Math.sin(face.breath) * 2;
+    let cy = Math.trunc(OLED_H / 2 + face.gazeY + bob);
+    if (face.speaking) cy -= 2;
+    const half = Math.trunc(face.cur.eyeW / 2);
+    const shift = Math.trunc(face.gazeX) + face.jitterX;
+    const leftCx = Math.trunc(OLED_W / 2 - EYE_GAP / 2 - half + shift);
+    const rightCx = Math.trunc(OLED_W / 2 + EYE_GAP / 2 + half + shift);
+    let hScale = 1 + face.pop * (face.emotion === "surprised" ? 0.3 : 0.12);
+    hScale *= 1 - face.squint * 0.4;
+    if (!face.awake) hScale += face.twitch * 2.5;
+    drawEye(leftCx, cy, true, hScale);
+    drawEye(rightCx, cy, false, hScale);
+    const eyeTop = cy - Math.trunc(face.cur.eyeH * hScale / 2);
+    const eyeBottom = cy + Math.trunc(face.cur.eyeH * hScale / 2);
+    if (!face.awake) {
+      for (const z of face.zeds) {
+        if (!z.alive) continue;
+        if (z.age > 0.8 && face.frame % 2 === 0) continue;
+        const size = z.age < 0.33 ? 8 : z.age < 0.66 ? 13 : 18;
+        const x = Math.trunc(z.x), y = Math.trunc(z.y);
+        if (x >= 0 && x < OLED_W - 4 && y > 4) drawZed(x, y, size);
+      }
+    } else {
+      fctx.fillStyle = "#fff";
+      const since = face.now - face.emotionSince;
+      if (face.emotion === "surprised" && since < 900) drawMark(OLED_W - 14, 20);
+      if (face.emotion === "happy" && face.cur.lowerLid > 8) {
+        for (let i = 0; i < 2; i++) {
+          const lx = leftCx - half - 8 + i * 3, rx = rightCx + half + 3 + i * 3;
+          drawPxLine(lx, eyeBottom + 1, lx + 3, eyeBottom - 3);
+          drawPxLine(rx, eyeBottom + 1, rx + 3, eyeBottom - 3);
+        }
+      }
+      if (face.emotion === "sad" && face.tearY >= 0) {
+        const tx = rightCx + half - 3, ty = eyeBottom + Math.trunc(face.tearY);
+        fctx.fillStyle = "#fff";
+        fillDisc(tx, ty, 2);
+        drawPxLine(tx, ty - 5, tx, ty - 2);
+      }
+      if (face.emotion === "thinking") {
+        fctx.fillStyle = "#fff";
+        for (let i = 0; i < face.thinkDots; i++) fillDisc(OLED_W - 26 + i * 8, 9, 2);
+      }
+      if (face.emotion === "angry" && Math.floor(face.frame / 6) % 2 === 0) {
+        fctx.fillStyle = "#fff";
+        drawPxLine(leftCx - half - 4, eyeTop - 4, leftCx - half - 2, eyeTop - 9);
+        drawPxLine(rightCx + half + 4, eyeTop - 4, rightCx + half + 2, eyeTop - 9);
+      }
+      drawMouth(Math.trunc(OLED_W / 2 + face.gazeX * 0.5), cy);
+    }
+    const img = fctx.getImageData(0, 0, OLED_W, OLED_H);
+    const px = img.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const on = px[i] >= 128;
+      px[i] = px[i + 1] = px[i + 2] = on ? 255 : 0;
+      px[i + 3] = 255;
+    }
+    fctx.putImageData(img, 0, 0);
+  }
+  let faceAcc = 0, faceClock = 0;
+  function faceLoop(t) {
+    if (!faceClock) faceClock = t;
+    let dt = t - faceClock;
+    faceClock = t;
+    if (dt > 200) dt = 200;
+    faceAcc += dt;
+    let steps = 0;
+    while (faceAcc >= 33 && steps < 6) { stepFace(); faceAcc -= 33; steps++; }
+    drawFace();
+    requestAnimationFrame(faceLoop);
+  }
+  requestAnimationFrame(faceLoop);
   let headTimer;
   function headChanged() {
     $("panv").textContent = $("pan").value + "°"; $("tiltv").textContent = $("tilt").value + "°";
