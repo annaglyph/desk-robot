@@ -165,7 +165,7 @@
         <div class="reticle"><div class="horizon" id="horizon"></div><div class="meridian" id="meridian"></div></div>
         <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
         <div class="readout"><span id="rpan">pan —</span><span id="rtilt">tilt —</span><span id="rtrack" class="off">not tracking</span></div>
-        <div class="nocam">No picture yet.<br>The robot's camera streams once it connects.</div>
+        <div class="nocam">No picture yet.<br>The robot's camera, or this computer's, shows up here.</div>
       </div>
       <div class="card" style="margin-top:16px">
         <h2 class="label"><span><span class="pname">{name}</span> hears</span><span class="sonar-state" id="hearstate">—</span></h2>
@@ -340,18 +340,18 @@
       const linked = !!s.robot;
       $("linkdot").className = "dot" + (linked ? " on" : "");
       $("link").textContent = linked ? "robot on WiFi" : "no robot";
-      $("fps").textContent = s.frame_age_s != null && s.frame_age_s < 3 ? s.fps + " fps" : "no signal";
-      $("fps").className = "v" + (s.frame_age_s != null && s.frame_age_s < 3 ? "" : " warn");
+      const fresh = s.frame_age_s != null && s.frame_age_s < 3;
+      $("fps").textContent = fresh ? s.fps + " fps" + (s.camera === "mac" ? " · Mac" : "") : "no signal";
+      $("fps").className = "v" + (fresh ? "" : " warn");
       $("temp").textContent = s.temperature_c != null ? s.temperature_c.toFixed(1) + " °C" : "—";
       $("temp").className = "v" + (s.temperature_c > 70 ? " warn" : "");
       $("state").textContent = s.speaking ? "speaking" : s.thinking ? "thinking" : s.awake ? "awake" : "asleep";
       $("mic").textContent = s.listening ? (s.mic === "robot" ? "robot mic" : "Mac mic") : "off";
       $("awakenote").textContent = s.awake ? "dozes off in " + Math.max(0, Math.round(s.awake_for)) + " s" : "asleep · say hey " + NAME;
 
-      const fresh = s.frame_age_s != null && s.frame_age_s < 3;
       $("viewport").classList.toggle("dark", !fresh);
       $("viewport").classList.toggle("speaking", !!s.speaking);
-      $("framenote").textContent = fresh ? "" : "no fresh frame";
+      $("framenote").textContent = fresh ? (s.camera === "mac" ? (s.camera_name || "Mac camera") : "") : "no fresh frame";
       const pan = s.pan ?? 0, tilt = s.tilt ?? 0;
       $("horizon").style.top = (50 + tilt * (25 / 60)) + "%";
       $("meridian").style.left = (50 - pan * (38 / 60)) + "%";

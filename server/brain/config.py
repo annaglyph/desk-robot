@@ -114,8 +114,10 @@ STT_THREADS = 8          # CPU threads for transcription (0 = library default of
 STT_PROMPT = f"Hey {ROBOT_NAME}. {ROBOT_NAME} is a robot."  # name hint for the model
 MIC_SOURCE = "auto"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
                          # "auto" = robot when it's connected, else this computer
-MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # local input by name (set MIC_DEVICE in
-                         # server/.env); None = system default. List devices: python -m sounddevice
+MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # comma-separated names, favourite
+                         # first (server/.env). The first one plugged in is used; if
+                         # none are, the built-in mic. Empty = the system default.
+                         # List devices: python -m sounddevice
 # Speech detection (server/brain/turn.py). A Silero VAD model decides whether
 # each 32 ms chunk is speech (VAD_THRESHOLD, 0..1: lower = more sensitive).
 # Once speech starts, a cutoff 0.15 lower keeps softer syllables from being
@@ -160,9 +162,17 @@ EMOTIONS = [
     "thinking",
 ]
 
-# Camera. The robot streams small JPEGs while connected; the live view
-# is at http://localhost:<LIVE_VIEW_PORT>/ on this computer.
+# Camera. While the robot is connected it streams small JPEGs; otherwise
+# this computer's webcam fills in, the same way the microphone does.
+# The webcam stays on the desk, so looking around and face tracking only
+# move the head when the robot's own camera is the one in use.
+# The live view is at http://localhost:<LIVE_VIEW_PORT>/ on this computer.
 CAMERA_FPS = 10
+CAMERA_SOURCE = "auto"      # "robot" = the robot's camera, "mac" = CAMERA_DEVICE,
+                             # "auto" = robot when it's connected, else this computer
+CAMERA_DEVICE = os.environ.get("CAMERA_DEVICE") or None  # same as MIC_DEVICE: names,
+                             # favourite first. A substring is enough ("PowerConf",
+                             # "FaceTime"). If none are plugged in, the built-in camera.
 LIVE_VIEW_PORT = 8766
 LIVE_VIEW_BIND = "127.0.0.1"  # this computer only. "0.0.0.0" would show the camera to the whole LAN.
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera when a question is about seeing

@@ -9,6 +9,10 @@ The camera rides on the head, so this is a simple servo loop: an error of
 x% of the half-width means the face is x% of half the field of view off
 axis. We move a fraction (TRACK_GAIN) of that per frame so the head glides
 rather than jerks, and ignore tiny errors (TRACK_DEADBAND).
+
+A Mac webcam standing in for the robot does not ride on the head, so those
+frames are drawn on (the box in the live view) and never turned into pan
+or tilt. The field-of-view numbers below belong to the head camera.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ class Tracker:
         seq = -1
         while True:
             seq = self.eyes.wait_for_new(seq, timeout=1.0)
-            jpeg = self.eyes.jpeg
+            jpeg, source = self.eyes.current()
             if not jpeg:
                 continue
             img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
@@ -80,16 +84,21 @@ class Tracker:
             self.face = face
             now = time.time()
 
-            if face is not None:
-                self.last_seen = now
-                self._lost_reported = False
-                self._steer(face, w, h, now)
-            elif self.tracking and now - self.last_seen > config.TRACK_LOST_SECONDS:
-                # Lost them: hand the head back to its idle glances.
-                self.tracking = False
-                if not self._lost_reported:
-                    self._lost_reported = True
-                    self.on_pose(None, None, False)
+            # The head only moves for the camera bolted to it. A frame that
+            # arrived just as the source changed belongs to the camera we left.
+            if self.eyes.source != source:
+                continue
+            if source == "robot":
+                if face is not None:
+                    self.last_seen = now
+                    self._lost_reported = False
+                    self._steer(face, w, h, now)
+                elif self.tracking and now - self.last_seen > config.TRACK_LOST_SECONDS:
+                    # Lost them: hand the head back to its idle glances.
+                    self.tracking = False
+                    if not self._lost_reported:
+                        self._lost_reported = True
+                        self.on_pose(None, None, False)
 
             self.eyes.publish(self._annotate(img, face, w, h))
 

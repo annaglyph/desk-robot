@@ -47,6 +47,7 @@ from .thinking import Interrupted, RobotBrain
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
 from .tracker import Tracker
+from .webcam import MacCamera
 
 robot_socket: websockets.ServerConnection | None = None
 brain: RobotBrain | None = None  # created in main() once the event loop exists
@@ -57,6 +58,7 @@ speech_started = asyncio.Event()  # the human began a new turn (set by the ears)
 awake_until = 0.0  # while time.time() < this, he's awake: no wake word needed
 robot_speak_done = asyncio.Event()  # robot finished playing the last reply
 eyes = Eyes()
+mac_camera = MacCamera(eyes)
 head_moves: asyncio.Queue[tuple[float | None, float | None, bool]] = asyncio.Queue()
 tracker: Tracker | None = None
 
@@ -106,6 +108,30 @@ def pick_mic_source() -> None:
             print(f"listening through the {'robot' if source == 'robot' else 'Mac'} mic")
 
 
+def pick_camera_source() -> None:
+    """auto: the robot's camera while it's connected, the Mac's webcam otherwise.
+
+    The webcam is closed whenever the robot's camera is selected, so it isn't
+    held open (and its light left on) for the whole session.
+    """
+    if config.CAMERA_SOURCE == "auto":
+        source = "robot" if robot_socket is not None else "mac"
+    elif config.CAMERA_SOURCE in ("robot", "mac"):
+        source = config.CAMERA_SOURCE
+    else:
+        print(f"(CAMERA_SOURCE {config.CAMERA_SOURCE!r} is not auto, robot, or mac — using auto)")
+        source = "robot" if robot_socket is not None else "mac"
+    if source == eyes.source and (source != "mac" or mac_camera.running):
+        return
+    eyes.set_source(source)
+    if source == "mac":
+        mac_camera.start()
+    else:
+        mac_camera.stop()
+        if robot_socket is not None:
+            print("seeing through the robot camera")
+
+
 async def handle_robot(websocket: websockets.ServerConnection) -> None:
     global robot_socket
     peer = websocket.remote_address[0] if websocket.remote_address else "?"
@@ -136,9 +162,11 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
     robot_socket = websocket
     print(f"robot connected! (fw {hello.get('fw', '?')}, {peer})")
     pick_mic_source()
+    pick_camera_source()
     if config.MIC_SOURCE in ("auto", "robot"):
         await send_to_robot({"type": "mic", "on": True})
-    await send_to_robot({"type": "stream", "on": True, "fps": config.CAMERA_FPS})
+    if eyes.source == "robot":
+        await send_to_robot({"type": "stream", "on": True, "fps": config.CAMERA_FPS})
     # No idle head glances: they fight deliberate looks. The eyes still move.
     await send_to_robot({"type": "glance", "on": False})
     try:
@@ -148,7 +176,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 if kind == b"\x01" and ears is not None and len(message) % 2 == 1:
                     ears.push_audio(message[1:])  # 1 type byte + whole 16-bit samples
                 elif kind == b"\x02":
-                    eyes.push_frame(message[1:])
+                    eyes.push_frame(message[1:], source="robot")
                 continue
             try:
                 event = json.loads(message)
@@ -177,6 +205,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
             robot_socket = None
             print("robot disconnected")
             pick_mic_source()
+            pick_camera_source()
 
 
 async def handle_console_line(line: str) -> bool:
@@ -192,6 +221,10 @@ async def handle_console_line(line: str) -> bool:
         return False
     if cmd == "status":
         print("robot connected" if robot_socket else "no robot connected")
+        if eyes.source == "mac":
+            print(f"camera: {mac_camera.name or mac_camera.error or 'Mac camera'}")
+        else:
+            print("camera: robot")
     elif cmd == "emo":
         if arg in config.EMOTIONS:
             await send_to_robot({"type": "emotion", "name": arg})
@@ -240,6 +273,11 @@ async def look(args: dict) -> tuple[str, bytes | None]:
     """Move the head, wait for it to get there, and grab a fresh frame.
     Only the axis that was asked for moves: "left"/"right" pan, "down"/
     "level" tilt, "center" both."""
+    if eyes.source != "robot":
+        # The computer's camera stays put, so a head move wouldn't change the picture.
+        jpeg = eyes.latest()
+        note = "The picture is from the computer's camera, which does not move. No head was turned."
+        return (note + (" Fresh camera image attached." if jpeg else " No camera image available."), jpeg)
     pan = tracker.pan if tracker else 0.0
     tilt = tracker.tilt if tracker else 0.0
     move_pan = move_tilt = False
@@ -603,6 +641,7 @@ def console_state() -> dict:
     now = time.time()
     return {
         "robot": robot_socket is not None,
+        "camera_name": mac_camera.name if eyes.source == "mac" else "",
         "listening": ears is not None,
         "mic": ears.source if ears is not None else None,
         "level": ears.level if ears is not None else 0.0,
@@ -926,6 +965,7 @@ async def main() -> None:
         voice_task = asyncio.create_task(voice_loop())
         doze_task = asyncio.create_task(doze_loop())
         head_task = asyncio.create_task(head_loop())
+        pick_camera_source()
         if config.LISTEN_ON_START:
             await start_listening()
         try:
@@ -934,6 +974,7 @@ async def main() -> None:
             voice_task.cancel()
             doze_task.cancel()
             head_task.cancel()
+            mac_camera.stop()
             if ears is not None:
                 stop_listening()
 

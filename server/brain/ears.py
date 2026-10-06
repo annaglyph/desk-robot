@@ -26,6 +26,7 @@ from collections.abc import Callable
 import numpy as np
 
 from . import config
+from .devices import builtin_mic, choose
 from .turn import VAD_CHUNK, SileroVAD, SmartTurn
 
 SAMPLE_RATE = 16_000
@@ -326,20 +327,30 @@ class Ears:
         try:
             import sounddevice as sd
 
+            # Favourite name first (MIC_DEVICE). A name that isn't plugged in
+            # is skipped; the built-in mic is next, then the system default.
+            inputs = [(i, d["name"]) for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+            if isinstance(self.device, int):
+                sd_index, missed = self.device, None
+            else:
+                index, missed = choose([name for _, name in inputs], self.device, builtin_mic)
+                sd_index = None if index is None else inputs[index][0]
             # Open every input the device has (a USB interface often has two) and mix them,
             # so it doesn't matter which jack the mic is plugged into.
-            channels = max(1, int(sd.query_devices(self.device, "input")["max_input_channels"]))
+            channels = max(1, int(sd.query_devices(sd_index, "input")["max_input_channels"]))
             self._stream = sd.InputStream(
                 samplerate=SAMPLE_RATE,
                 channels=channels,
                 dtype="float32",
                 blocksize=BLOCK_SAMPLES,
-                device=self.device,
+                device=sd_index,
                 callback=self._on_audio,
             )
             self._stream.start()
             self.device_name = sd.query_devices(self._stream.device)["name"]
             self.mac_error = None
+            if missed:
+                print(f"({missed} isn't connected — using \"{self.device_name}\")")
         except Exception as e:
             self._stream = None
             self.device_name = "no Mac mic"

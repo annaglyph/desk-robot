@@ -1,7 +1,9 @@
-"""Eyes: the robot's camera stream, and a live-view page for the browser.
+"""Eyes: the camera stream, and a live-view page for the browser.
 
-The robot sends one JPEG per binary frame (type byte 0x02). We keep only the
-newest. A tiny HTTP server (standard library, its own thread) serves:
+The robot sends one JPEG per binary frame (type byte 0x02). A Mac webcam can
+feed the same slot while the robot is away (see webcam.py). We keep only the
+newest frame from whichever source is selected. A tiny HTTP server (standard
+library, its own thread) serves:
 
   /          the console page (brain/liveview.html): what Rocky sees and
              hears, plus controls for his head, face, voice, sleep and
@@ -30,7 +32,8 @@ from . import config
 
 class Eyes:
     def __init__(self) -> None:
-        self.jpeg: bytes = b""          # newest raw frame from the robot
+        self.jpeg: bytes = b""          # newest raw frame from the live camera
+        self.source = "robot"           # "robot" or "mac": whose frames are accepted
         self.frame_at = 0.0
         self.frame_seq = 0
         self.display: bytes = b""       # what the browser shows (annotated if a tracker runs)
@@ -47,10 +50,27 @@ class Eyes:
         self.command_handler: Callable[[str, dict], dict] | None = None
         self._cond = threading.Condition()
 
-    # ── robot → server ──────────────────────────────────────────────────────
-    def push_frame(self, jpeg: bytes) -> None:
+    # ── camera → server ─────────────────────────────────────────────────────
+    def set_source(self, source: str) -> None:
+        """Choose which camera's frames count. Drops the previous picture so
+        a question can't be answered with the camera we just left."""
+        with self._cond:
+            if source == self.source:
+                return
+            self.source = source
+            self.jpeg = b""
+            self.display = b""
+            self.frame_at = 0.0
+            self._cond.notify_all()
+
+    def push_frame(self, jpeg: bytes, *, source: str) -> None:
+        """Keep `jpeg` if `source` is the camera currently selected."""
+        if not jpeg:
+            return
         now = time.time()
         with self._cond:
+            if source != self.source:
+                return
             self.jpeg = jpeg
             self.frame_at = now
             self.frame_seq += 1
@@ -61,6 +81,11 @@ class Eyes:
                 self.display = jpeg
                 self.display_seq = self.frame_seq
             self._cond.notify_all()
+
+    def current(self) -> tuple[bytes, str]:
+        """The newest frame and which camera it came from."""
+        with self._cond:
+            return self.jpeg, self.source
 
     def publish(self, jpeg: bytes) -> None:
         """A frame for the browser (the tracker's annotated copy)."""
@@ -165,6 +190,7 @@ class Eyes:
                         "fps": round(eyes.fps(), 1),
                         "frame_age_s": round(time.time() - eyes.frame_at, 1) if eyes.frame_at else None,
                         "frames": eyes.frames,
+                        "camera": eyes.source,
                         "temperature_c": eyes.temperature,
                         "last_heard": eyes.last_heard,
                         "last_said": eyes.last_said,
