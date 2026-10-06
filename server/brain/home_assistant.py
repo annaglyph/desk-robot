@@ -235,8 +235,18 @@ class HomeAssistant:
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "HomeAssistant":
-        """Settings from the environment. A blank value means unset."""
-        env = os.environ if environ is None else environ
+        """Settings from the environment. A blank value means unset.
+
+        With no mapping, brain.config loads server/.env first, then the
+        process environment is read. An explicit mapping, including {},
+        is used alone and does not touch that file.
+        """
+        if environ is None:
+            from . import config  # loads server/.env into os.environ
+            del config
+            env = os.environ
+        else:
+            env = environ
         entities = {
             name: Reading(env.get(f"HOME_ASSISTANT_ENTITY_{name.upper()}", "").strip(), numeric)
             for name, numeric in CATALOG.items()

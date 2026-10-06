@@ -6,6 +6,9 @@ HOME_ASSISTANT_TOKEN from the environment.
 
 import io
 import json
+import os
+import subprocess
+import sys
 import unittest
 import urllib.error
 from email.message import Message
@@ -286,6 +289,51 @@ class ContractTests(unittest.TestCase):
         empty = HomeAssistant.from_env({})
         assert_failure(self, empty.get_state("pool_temperature"), "not_configured")
 
+    def test_empty_mapping_does_not_fall_through_to_the_process_environment(self):
+        with patch.dict(os.environ, {
+            "HOME_ASSISTANT_URL": "http://from-process.example:8123",
+            "HOME_ASSISTANT_TOKEN": "process-token-not-from-dotenv",
+            "HOME_ASSISTANT_ENTITY_POOL_TEMPERATURE": "sensor.from_process",
+        }):
+            ha = HomeAssistant.from_env({})
+        assert_failure(self, ha.get_state("pool_temperature"), "not_configured")
+        self.assertEqual(ha._url, "")
+        self.assertEqual(ha._token, "")
+        self.assertEqual(ha._entities["pool_temperature"].entity_id, "")
+
+    def test_implicit_environment_loads_project_dotenv_before_reading(self):
+        """The smoke test passes no mapping, so from_env must load server/.env first."""
+        server = Path(__file__).resolve().parents[1]
+        if not (server / ".env").is_file():
+            self.skipTest("server/.env is not present")
+        script = """
+import sys
+from brain import home_assistant
+assert "brain.config" not in sys.modules
+from brain.home_assistant import HomeAssistant
+ha = HomeAssistant.from_env()
+assert "brain.config" in sys.modules
+ready = bool(ha._url and ha._token and ha._entities["pool_temperature"].entity_id)
+sys.stdout.write("configured\\n" if ready else "missing\\n")
+"""
+        env = os.environ.copy()
+        for key in list(env):
+            if key.startswith("HOME_ASSISTANT_"):
+                del env[key]
+        env["PYTHONPATH"] = str(server)
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=server,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "configured\n")
+        self.assertNotIn("Bearer", proc.stdout)
+        self.assertNotIn("Bearer", proc.stderr)
+
     def test_catalog_is_the_five_readings(self):
         self.assertEqual(
             list(CATALOG),
@@ -405,6 +453,29 @@ class SmokeCommandTests(unittest.TestCase):
         self.assertNotIn(TOKEN, out.getvalue())
         self.assertNotIn(TOKEN, err.getvalue())
         self.assertEqual(fetch.calls[0][0], f"{URL}/api/states/sensor.pool_temperature")
+
+    def test_standalone_smoke_output_never_exposes_the_token(self):
+        secret = "do-not-print-this-ha-token"
+        fetch = FakeFetch(401, b"")
+        ha = HomeAssistant(URL, secret, {
+            "pool_temperature": Reading("sensor.pool_temperature", True),
+        }, fetch=fetch)
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            patch.dict(os.environ, {
+                "HOME_ASSISTANT_URL": URL,
+                "HOME_ASSISTANT_TOKEN": secret,
+            }),
+            patch.object(HomeAssistant, "from_env", return_value=ha),
+            patch("sys.stdout", out),
+            patch("sys.stderr", err),
+        ):
+            code = home_assistant.main(["pool_temperature"])
+        blob = out.getvalue() + err.getvalue()
+        self.assertEqual(code, 1)
+        self.assertNotIn(secret, blob)
+        self.assertNotIn(secret, repr(ha))
+        self.assertIn("authentication_failed", out.getvalue())
 
     def test_smoke_default_names_and_not_configured_hint(self):
         ha = HomeAssistant.from_env({})
