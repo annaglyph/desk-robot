@@ -191,12 +191,9 @@ CAMERA_WORDS = [
 ]
 
 # Face tracking: the head follows the biggest face in the picture.
-# Off until you ask ("Rocky, track me"); phrases below switch it without a
-# brain call, and Rocky can also switch it himself when asked in other words.
+# Off until a conversation turns it on. Ordinary wording goes to the model,
+# which calls track_face; the console `track` command still switches it directly.
 TRACKING = False
-TRACK_ON_PHRASES = ["track me", "follow me", "watch me", "keep your eyes on me", "look at me"]
-TRACK_OFF_PHRASES = ["stop tracking", "stop following", "stop watching", "stop looking at me"]
-# What he says when tracking starts/stops: personality.py, LINES.
 TRACK_HFOV = 62.0          # camera field of view, degrees (OV2640 stock lens)
 TRACK_VFOV = 48.0
 TRACK_GAIN = 0.5           # fraction of the error corrected per frame (lower = calmer)

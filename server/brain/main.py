@@ -879,18 +879,9 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
     awake_until = time.time() + config.AWAKE_SECONDS  # anything you say keeps him up
     norm = normalize(text)
     lines = personality.LINES
-    if any(p in norm for p in config.TRACK_ON_PHRASES) and not any(p in norm for p in config.TRACK_OFF_PHRASES):
-        await set_tracking(True)
-        print(f"{config.ROBOT_NAME} [happy]: {lines['track_on']}")
-        await send_to_robot({"type": "emotion", "name": "happy"})
-        await say(lines["track_on"])
-        return
-    if any(p in norm for p in config.TRACK_OFF_PHRASES):
-        await set_tracking(False)
-        print(f"{config.ROBOT_NAME} [neutral]: {lines['track_off']}")
-        await send_to_robot({"type": "emotion", "name": "neutral"})
-        await say(lines["track_off"])
-        return
+    # Face tracking is not decided here. Substring phrases ("look at me",
+    # "follow me") used to start tracking before the model saw the sentence,
+    # so "don't look at me" turned it on. track_face does that job instead.
     if any(p in norm for p in config.SLEEP_PHRASES):
         # "Rocky, sleep": goodnight line, sleepy face, and only "hey Rocky"
         # wakes him. No brain call.
