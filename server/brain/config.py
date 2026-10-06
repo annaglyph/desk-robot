@@ -35,9 +35,10 @@ HUMAN_NAME = os.environ.get("HUMAN_NAME", "friend")
 #   HOME_ASSISTANT_TOKEN
 
 # Language model. The brain speaks the OpenAI-style chat API, which
-# OpenRouter, Anthropic and OpenAI all serve, so pick a provider here and
-# put its key in server/.env as LLM_API_KEY. OpenRouter is the default
-# because one key reaches every model, and the model is just a string:
+# OpenRouter, Anthropic and OpenAI all serve. Put the key in server/.env as
+# LLM_API_KEY. LLM_BASE_URL and MODEL there (or in the shell) override the
+# defaults below; a missing or blank value keeps the default. OpenRouter is
+# the default because one key reaches every model, and the model is a string:
 #
 #   provider    LLM_BASE_URL                       MODEL (examples)
 #   OpenRouter  https://openrouter.ai/api/v1       anthropic/claude-haiku-4.5   (best at staying in character, ~$1-4/month)
@@ -48,8 +49,21 @@ HUMAN_NAME = os.environ.get("HUMAN_NAME", "friend")
 #
 # The model must accept images (Rocky sends camera frames) and tool calls
 # (he moves his head with them).
-LLM_BASE_URL = "https://openrouter.ai/api/v1"
-MODEL = "anthropic/claude-haiku-4.5"
+DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
+
+
+def env_text(name: str, default: str) -> str:
+    """Environment value, or `default` when it is missing or only whitespace."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value or default
+
+
+LLM_BASE_URL = env_text("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+MODEL = env_text("MODEL", DEFAULT_MODEL)
 
 # WebSocket port the robot connects to.
 PORT = 8765
@@ -194,7 +208,8 @@ SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera when a question is about
 CAMERA_WORDS = [
     "see", "seeing", "look", "looking", "watch", "watching", "camera", "picture",
     "photo", "image", "view", "describe", "notice", "recognize", "recognise",
-    "holding", "wearing", "what color", "what colour", "what am i", "who is",
+    "holding", "wearing", "what color", "what colour", "what am i",
+    "who is that", "who is this", "who is there", "who is in front of you",
     "who's", "how many", "in front of you", "behind you", "on my desk", "on the desk",
     "in the room", "whiteboard", "on the screen", "on my screen", "read this", "read that",
     "read the", "read what",

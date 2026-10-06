@@ -9,11 +9,11 @@ Three jobs:
   3. Listening: hears "hey Rocky" on the mic, sends what you say to
      the language model, and speaks the reply through the robot (or the Mac).
 
-A reply is a pipeline, not a wait: the model's words stream in, each
-finished sentence goes to the voice as soon as it exists, and the voice's
-audio streams to the speaker as it's made. If you start talking again
-before Rocky has begun speaking, the reply is dropped and he listens to
-the rest of what you're saying, then answers once.
+A reply is a pipeline, not a wait: each model round is read completely,
+then its sentences go to the voice, and the voice's audio streams to the
+speaker as it's made. A round that calls a tool is not spoken. If you start
+talking again before Rocky has begun speaking, the reply is dropped and he
+listens to the rest of what you're saying, then answers once.
 
 Console commands:
   ask <question>   send a question to the brain, print and speak the reply
@@ -269,6 +269,44 @@ async def handle_console_line(line: str) -> bool:
 
 # ── Rocky's abilities (called by the brain, from its worker thread) ──────────
 
+# After the move is commanded, give the servo this long to arrive, then wait
+# for a frame newer than the pre-move one. Together they stay within the old
+# worst case: a fixed 1.2 s plus up to 1.0 s of polling.
+LOOK_SETTLE_SECONDS = 0.6
+LOOK_WAIT_BUDGET = 2.2
+
+
+async def _wait_for_look_frame(seen_seq: int) -> None:
+    """Settle, then wait for a frame newer than `seen_seq`. Never past the budget."""
+    started = time.monotonic()
+    await asyncio.sleep(min(LOOK_SETTLE_SECONDS, LOOK_WAIT_BUDGET))
+    remaining = LOOK_WAIT_BUDGET - (time.monotonic() - started)
+    if remaining <= 0:
+        return
+    seen = seen_seq
+    timeout = remaining
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: eyes.wait_for_new(seen, timeout)
+    )
+
+
+def _look_image(seen_seq: int) -> tuple[str, bytes | None]:
+    """What to tell the model about the picture after a head move.
+
+    A frame that arrived after the command is fresh. An older in-date frame
+    is still attached, and said to be older. Anything else is no image.
+    """
+    jpeg = eyes.latest()
+    if eyes.frame_seq != seen_seq and jpeg is not None:
+        return " Fresh camera image attached.", jpeg
+    if jpeg is not None:
+        return (
+            " No new camera frame after the move. The attached image is an older one, not a new view.",
+            jpeg,
+        )
+    return " No camera image available.", None
+
+
 async def look(args: dict) -> tuple[str, bytes | None]:
     """Move the head, wait for it to get there, and grab a fresh frame.
     Only the axis that was asked for moves: "left"/"right" pan, "down"/
@@ -303,19 +341,15 @@ async def look(args: dict) -> tuple[str, bytes | None]:
     if tracker is not None and tracker.enabled:
         await set_tracking(False, announce=False)  # tracking would drag the head back
     await set_head_held(d != "center")
+    seen = eyes.frame_seq  # the picture from before this move is commanded
     if move_pan:
         await send_to_robot({"type": "pan", "deg": pan})
     if move_tilt:
         await send_to_robot({"type": "tilt", "deg": tilt})
     if tracker is not None:
         tracker.note_pose(pan=pan if move_pan else None, tilt=tilt if move_tilt else None)
-    await asyncio.sleep(1.2)  # servo easing + a frame or two from the new angle
-    seq = eyes.frame_seq
-    for _ in range(10):
-        if eyes.frame_seq != seq:
-            break
-        await asyncio.sleep(0.1)
-    jpeg = eyes.latest()
+    await _wait_for_look_frame(seen)
+    note, jpeg = _look_image(seen)
     pan_word = "left" if pan < -5 else "right" if pan > 5 else "center"
     if tilt <= config.TRACK_TILT_MIN + 0.5:
         tilt_word = "down, as far as it goes"
@@ -324,7 +358,7 @@ async def look(args: dict) -> tuple[str, bytes | None]:
     else:
         tilt_word = "down" if tilt < -5 else "level"
     where = f"Head is now at pan {pan:.0f} deg ({pan_word}), tilt {tilt:.0f} deg ({tilt_word})."
-    return (where + (" Fresh camera image attached." if jpeg else " No camera image available."), jpeg)
+    return (where + note, jpeg)
 
 
 head_held = False  # he was told to look somewhere and is holding that pose
@@ -554,7 +588,7 @@ async def converse(question: str, ended_at: float | None = None, heard_at: float
     """Ask the brain, show the face, and speak the answer as it forms.
     Returns False if the human started talking again before Rocky spoke
     (the reply was dropped and the question is still open)."""
-    global awake_until
+    global thinking
     loop = asyncio.get_running_loop()
     tl = Timeline(ended_at or time.time())
     if heard_at is not None:
@@ -567,24 +601,21 @@ async def converse(question: str, ended_at: float | None = None, heard_at: float
         print("  (camera has no fresh frame — telling him he can't see right now)")
     reply = SpokenReply(loop, tl)
     reply.think_and_speak(question, jpeg, camera_wanted)
-    global thinking
     thinking = True
     try:
         finished = await reply.play()
     except Exception as e:  # a speaker hiccup shouldn't kill the server
         print(f"(could not speak: {e})")
         finished = True
-    finally:
-        thinking = False
+    if finished and reply.text:
+        eyes.last_said = reply.text
+        if config.DEBUG_TTS_CHECK and reply.pcm:
+            loop.run_in_executor(None, check_tts, reply.text, b"".join(reply.pcm))
+    finish_turn(finished)  # refresh the clock before thinking clears
     if not finished:
         print("  (you kept talking — Rocky will hear the rest and answer once)")
         await send_to_robot({"type": "emotion", "name": "neutral"})
         return False
-    if reply.text:
-        eyes.last_said = reply.text
-        if config.DEBUG_TTS_CHECK and reply.pcm:
-            loop.run_in_executor(None, check_tts, reply.text, b"".join(reply.pcm))
-    awake_until = time.time() + config.AWAKE_SECONDS
     tl.report()
     return True
 
@@ -823,13 +854,37 @@ async def head_loop() -> None:
         eyes.tracking_info = {"tracking": tracking, "pan": pan, "tilt": tilt}
 
 
+def staying_up(now: float | None = None) -> bool:
+    """Awake on the clock, or while a reply is being composed or spoken.
+
+    `thinking` covers the model call and the gap before the first audio.
+    `ears.muted` covers playback, including a canned line such as goodnight.
+    """
+    if thinking:
+        return True
+    if ears is not None and ears.muted.is_set():
+        return True
+    moment = time.time() if now is None else now
+    return moment < awake_until
+
+
+def finish_turn(finished: bool) -> None:
+    """End a conversation turn. A finished reply refreshes the awake clock
+    before `thinking` clears, so doze cannot fire in that gap."""
+    global awake_until, thinking
+    if finished:
+        awake_until = time.time() + config.AWAKE_SECONDS
+    thinking = False
+
+
 async def doze_loop() -> None:
     """When the awake clock runs out, he nods off on his own (sleepy face,
-    no announcement). Saying "hey Rocky" wakes him again."""
+    no announcement). Saying "hey Rocky" wakes him again. He does not nod
+    off while a reply is being composed or spoken."""
     was_awake = False
     while True:
         await asyncio.sleep(1)
-        awake = time.time() < awake_until
+        awake = staying_up()
         if was_awake and not awake:
             print(f"({config.ROBOT_NAME} dozed off — say \"hey {config.ROBOT_NAME}\" to wake him)")
             await send_to_robot({"type": "asleep", "on": True})
@@ -866,7 +921,7 @@ async def voice_loop() -> None:
 
 
 async def _handle_heard(item: tuple[str, float, float, float]) -> None:
-    global awake_until
+    global awake_until, thinking
     text, started_at, ended_at, heard_at = item
     woke, question = strip_wake_word(text)
     # Judge the follow-up window by when you STARTED talking, not by when
@@ -884,12 +939,17 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
     # so "don't look at me" turned it on. track_face does that job instead.
     if any(p in norm for p in config.SLEEP_PHRASES):
         # "Rocky, sleep": goodnight line, sleepy face, and only "hey Rocky"
-        # wakes him. No brain call.
+        # wakes him. No brain call. thinking stays set until the line has
+        # finished and the asleep face is sent, so doze cannot cut in.
         awake_until = 0.0
-        print(f"{config.ROBOT_NAME} [sleepy]: {lines['sleep']}")
-        await send_to_robot({"type": "emotion", "name": "sleepy"})
-        await say(lines["sleep"])
-        await send_to_robot({"type": "asleep", "on": True})
+        thinking = True
+        try:
+            print(f"{config.ROBOT_NAME} [sleepy]: {lines['sleep']}")
+            await send_to_robot({"type": "emotion", "name": "sleepy"})
+            await say(lines["sleep"])
+            await send_to_robot({"type": "asleep", "on": True})
+        finally:
+            thinking = False
         awake_until = 0.0  # say() doesn't touch it, but be explicit
         return
     if woke:

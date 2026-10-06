@@ -1,6 +1,9 @@
 """Thinking: sends a question (and the newest camera frame) to the language
-model and hands back what Rocky should say and feel, one sentence at a time
-as the model writes it.
+model and hands back what Rocky should say and feel.
+
+Each model round is read to the end first. A round that calls a tool is not
+spoken; the next round may call another tool or become the reply. A spoken
+round is then handed back one sentence at a time.
 
 The request is the OpenAI-style chat API, which OpenRouter, Anthropic and
 OpenAI all serve, so the provider is a base URL and the model is a string
@@ -31,6 +34,35 @@ _EMOTION_TAG = re.compile(r"^\s*\[(\w+)\]\s*", re.S)
 # A sentence ends at . ! or ? followed by a space — but not at an ellipsis:
 # "just... clear answer." is one sentence, not two.
 _SENTENCE_END = re.compile(r"(?<=[!?])\s+|(?<=[^.]\.)\s+")
+# Known face tags only. Other bracketed text ("[pin 3]", "[note]") is speech.
+_KNOWN_EMOTION_TAG = re.compile(
+    r"\[\s*(?:" + "|".join(re.escape(name) for name in sorted(config.EMOTIONS, key=len, reverse=True)) + r")\s*\]",
+    re.IGNORECASE,
+)
+
+
+def strip_known_emotion_tags(text: str) -> str:
+    """Remove Rocky's face tags so they are never spoken. Other brackets stay."""
+    cleaned = _KNOWN_EMOTION_TAG.sub(" ", text)
+    cleaned = re.sub(r"[^\S\n]{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def limited_sentences(text: str, limit: int) -> tuple[list[str], bool]:
+    """The sentences to speak, and whether the reply was cut at `limit`."""
+    parts = _SENTENCE_END.split(text)
+    sentences: list[str] = []
+    while len(parts) > 1:
+        piece = parts.pop(0).strip()
+        if piece:
+            sentences.append(piece)
+    tail = parts[-1].strip() if parts else ""
+    if tail:
+        sentences.append(tail)
+    if len(sentences) > limit:
+        return sentences[:limit], True
+    return sentences, False
+
 
 # An action returns (text for the model, optional fresh camera JPEG).
 Action = Callable[[dict], tuple[str, bytes | None]]
@@ -41,13 +73,18 @@ TOOLS = [
         "function": {
             "name": "look",
             "description": (
-                "Move your head to look somewhere. Use it whenever you are asked to "
-                "look left/right/down/up/around, or need to see something outside "
-                "the current picture. Always call it when asked, even if you think "
-                "you are already there: the result tells you where your head really "
-                "is and whether it is at a limit. You get a fresh camera image "
-                "afterwards; describe only what that image shows. Up is as high as "
-                "'level': your neck cannot tilt above eye level."
+                "Move your head and look with the camera. Use it when you are "
+                "explicitly asked to look, turn, inspect, or check visually, or "
+                "when the answer genuinely needs visual information that is not "
+                "in the current image. If that image is not enough, call it again "
+                "on a later turn. Do not call it merely because a person, physical "
+                "object, room, or past event was mentioned. When explicitly asked "
+                "to look in a direction, always call it, even if you think your "
+                "head is already there: the result tells you where your head really "
+                "is and whether it is at a limit. left and right turn only; down "
+                "and level nod only; center is straight ahead and level. Describe "
+                "only what the image shows. Up is as high as 'level': your neck "
+                "cannot tilt above eye level."
             ),
             "parameters": {
                 "type": "object",
@@ -196,7 +233,12 @@ class RobotBrain:
 
     def _converse(self, on_emotion: Callable[[str], None] | None, cancelled: threading.Event) -> Iterator[str]:
         """One question, possibly several model calls if it uses its abilities.
-        Yields sentences as they complete."""
+
+        The whole round is consumed before any of it is spoken. Tool calls in
+        that round run in index order and the lead-in is not spoken; a later
+        round may call tools again. A round with no tool call is spoken, and
+        the sentence cap is applied only then.
+        """
         nudged = False
         limit = config.REPLY_MAX_SENTENCES
         for _ in range(5):
@@ -209,11 +251,8 @@ class RobotBrain:
                 tools=TOOLS if self.actions else openai.NOT_GIVEN,
                 stream=True,
             )
-            buf = ""                 # text not yet released as a sentence
             raw: list[str] = []      # everything the model wrote this round
-            tag_decided = False
             calls: dict[int, dict] = {}
-            spoken = 0
             try:
                 for chunk in stream:
                     if cancelled.is_set():
@@ -221,7 +260,7 @@ class RobotBrain:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
-                    for tc in delta.tool_calls or []:
+                    for tc in getattr(delta, "tool_calls", None) or []:
                         entry = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
                         if tc.id:
                             entry["id"] = tc.id
@@ -230,42 +269,21 @@ class RobotBrain:
                                 entry["name"] = tc.function.name
                             if tc.function.arguments:
                                 entry["arguments"] += tc.function.arguments
-                    if not delta.content:
-                        continue
-                    raw.append(delta.content)
-                    buf += delta.content
-                    if not tag_decided:
-                        buf, tag_decided = self._take_emotion_tag(buf, final=False)
-                        if not tag_decided:
-                            continue
-                        if on_emotion is not None:
-                            on_emotion(self.emotion)
-                    parts = _SENTENCE_END.split(buf)
-                    while len(parts) > 1:  # everything but the last piece is a whole sentence
-                        s = parts.pop(0).strip()
-                        if s:
-                            spoken += 1
-                            yield s
-                        if spoken >= limit:
-                            break
-                    buf = parts[-1] if parts else ""
-                    if spoken >= limit:
-                        print(f"  (trimmed reply to {limit} sentences)")
-                        buf = ""
-                        break
+                    content = getattr(delta, "content", None)
+                    if content:
+                        raw.append(content)
             finally:
                 stream.close()
 
-            if not tag_decided:
-                buf, _ = self._take_emotion_tag(buf, final=True)
-                if on_emotion is not None and (buf.strip() or not calls):
-                    on_emotion(self.emotion)
+            emotion_before = self.emotion
+            body, _ = self._take_emotion_tag("".join(raw), final=True)
+            # The first valid leading tag sets the face, including on a silent
+            # tool round. A spoken round reports its emotion before any audio.
+            if on_emotion is not None and (self.emotion != emotion_before or not calls):
+                on_emotion(self.emotion)
 
             if calls:
-                # He decided to do something: say any lead-in, run it, tell him what happened.
-                if buf.strip():
-                    yield buf.strip()
-                    buf = ""
+                # The lead-in stays in the transcript for the model and is not spoken.
                 self.history.append({
                     "role": "assistant",
                     "content": "".join(raw),
@@ -309,10 +327,13 @@ class RobotBrain:
                 continue
             if nudged and self.history and self.history[-1].get("role") == "user":
                 self.history.pop()  # don't keep the nudge in the transcript
-            tail = buf.strip()
-            if tail and spoken < limit:
-                yield tail
-            elif not spoken and not tail:
+            spoken_text = strip_known_emotion_tags(body)
+            sentences, trimmed = limited_sentences(spoken_text, limit)
+            if trimmed:
+                print(f"  (trimmed reply to {limit} sentences)")
+            if sentences:
+                yield from sentences
+            else:
                 self.emotion = "thinking"
                 if on_emotion is not None:
                     on_emotion(self.emotion)

@@ -32,7 +32,7 @@ class PersonalContextTests(unittest.TestCase):
             path = Path(directory) / "personal_context.txt"
             path.write_text(fact + "\n", encoding="utf-8")
             prompt = personality.compose_system_prompt(personality.load_personal_context(path))
-        self.assertIn("What you know about your human and crew:", prompt)
+        self.assertIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
         self.assertIn(fact, prompt)
         self.assertIn("[happy] Coffee is fuel", prompt)
         self.assertGreater(prompt.index(fact), prompt.index("Example replies:"))
@@ -42,7 +42,7 @@ class PersonalContextTests(unittest.TestCase):
             path = Path(directory) / "personal_context.txt"
             prompt = personality.compose_system_prompt(personality.load_personal_context(path))
         self.assertEqual(prompt, personality.compose_system_prompt(""))
-        self.assertNotIn("What you know about your human and crew:", prompt)
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
         self.assertNotIn("Miso", prompt)
 
     def test_empty_file_adds_no_section(self):
@@ -51,13 +51,22 @@ class PersonalContextTests(unittest.TestCase):
             path.write_text(" \n\n\t", encoding="utf-8")
             prompt = personality.compose_system_prompt(personality.load_personal_context(path))
         self.assertEqual(prompt, personality.compose_system_prompt(""))
-        self.assertNotIn("What you know about your human and crew:", prompt)
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
 
     def test_unreadable_file_adds_no_section(self):
         with tempfile.TemporaryDirectory() as directory:
             prompt = personality.compose_system_prompt(personality.load_personal_context(Path(directory)))
         self.assertEqual(prompt, personality.compose_system_prompt(""))
-        self.assertNotIn("What you know about your human and crew:", prompt)
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
+
+    def test_example_file_is_safe_to_inject(self):
+        example = Path(__file__).resolve().parents[1] / "personal_context.example.txt"
+        prompt = personality.compose_system_prompt(example.read_text(encoding="utf-8"))
+        lowered = prompt.lower()
+        self.assertIn("Miso", prompt)
+        self.assertNotIn("personal_context", lowered)
+        self.assertNotIn("private file", lowered)
+        self.assertNotIn("#", example.read_text(encoding="utf-8"))
 
 
 class SpeakerTuningTests(unittest.TestCase):

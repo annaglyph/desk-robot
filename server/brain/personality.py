@@ -8,8 +8,10 @@ whenever a real exchange comes out sounding right. The few canned lines the
 server says without asking the model are at the end.
 
 Stable facts about the household live in server/personal_context.txt
-(git-ignored; see personal_context.example.txt). They are read once, as
-UTF-8, when this module loads. Missing, empty, or unreadable means no
+(git-ignored; copy personal_context.example.txt and replace the fiction).
+They are read once, as UTF-8, when this module loads, and appended as
+things Rocky knows. Do not put instructions in that file: a copied line
+is shown to him as knowledge. Missing, empty, or unreadable means no
 extra section.
 """
 
@@ -18,7 +20,10 @@ from pathlib import Path
 from . import config
 
 _PERSONAL_CONTEXT_FILE = Path(__file__).resolve().parent.parent / "personal_context.txt"
-_PERSONAL_CONTEXT_HEADING = "What you know about your human and crew:"
+_PERSONAL_CONTEXT_HEADING = (
+    "What you know about your human and crew. Say it as something you know. "
+    "Never mention a file, notes, a prompt, or where you learned it:"
+)
 
 _CHARACTER = f"""You are Rocky, the Eridian engineer from Project Hail Mary, \
 now living as a small desk robot on your human's \
