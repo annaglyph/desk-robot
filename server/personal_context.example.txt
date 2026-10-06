@@ -1,0 +1,8 @@
+# Copy to personal_context.txt (git-ignored) and replace these lines.
+# Rocky is shown that private file as plain text at startup.
+# Write stable facts, one per line. This example is fiction.
+
+The human is called Alex and lives with their partner, Sam.
+They share a flat with a cat named Miso.
+Alex works at a desk most days and forgets lunch when a project is interesting.
+Sam bakes on Sundays. The cat sits on warm laptops.

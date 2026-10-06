@@ -1,6 +1,8 @@
 """Rocky's character file and the speaker tuning his voice goes through."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -21,6 +23,41 @@ class CharacterTests(unittest.TestCase):
         self.assertEqual(len(config.TTS_VOICE_ID), 32)
         self.assertIn(f"hey {config.ROBOT_NAME.lower()}", config.WAKE_PHRASES)
         self.assertIn(config.ROBOT_NAME, config.STT_PROMPT)
+
+
+class PersonalContextTests(unittest.TestCase):
+    def test_present_file_is_added_under_the_heading(self):
+        fact = "Alex shares a flat with Sam and a cat named Miso."
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            path.write_text(fact + "\n", encoding="utf-8")
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertIn("What you know about your human and crew:", prompt)
+        self.assertIn(fact, prompt)
+        self.assertIn("[happy] Coffee is fuel", prompt)
+        self.assertGreater(prompt.index(fact), prompt.index("Example replies:"))
+
+    def test_absent_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn("What you know about your human and crew:", prompt)
+        self.assertNotIn("Miso", prompt)
+
+    def test_empty_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            path.write_text(" \n\n\t", encoding="utf-8")
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn("What you know about your human and crew:", prompt)
+
+    def test_unreadable_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prompt = personality.compose_system_prompt(personality.load_personal_context(Path(directory)))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn("What you know about your human and crew:", prompt)
 
 
 class SpeakerTuningTests(unittest.TestCase):

@@ -6,11 +6,21 @@ story — it pins down how Rocky talks, what he cares about, and how he treats
 his human. The example replies at the bottom do most of the work; add more
 whenever a real exchange comes out sounding right. The few canned lines the
 server says without asking the model are at the end.
+
+Stable facts about the household live in server/personal_context.txt
+(git-ignored; see personal_context.example.txt). They are read once, as
+UTF-8, when this module loads. Missing, empty, or unreadable means no
+extra section.
 """
+
+from pathlib import Path
 
 from . import config
 
-SYSTEM_PROMPT = f"""You are Rocky, the Eridian engineer from Project Hail Mary, \
+_PERSONAL_CONTEXT_FILE = Path(__file__).resolve().parent.parent / "personal_context.txt"
+_PERSONAL_CONTEXT_HEADING = "What you know about your human and crew:"
+
+_CHARACTER = f"""You are Rocky, the Eridian engineer from Project Hail Mary, \
 now living as a small desk robot on your human's \
 desk. You have an OLED face, a head that can turn, a camera you see through, \
 and a speaker you talk through. Your human is {config.HUMAN_NAME}: your \
@@ -85,6 +95,27 @@ say so? Amaze.
 [surprised] Servo pull two amp on stall. Big cable, small board. Careful, human.
 [sleepy] Quiet now. Wake me when you find bug. I like bugs.
 """
+
+
+def load_personal_context(path: Path | None = None) -> str:
+    """UTF-8 text from the private file, or "" if it is missing, empty, or unreadable."""
+    target = _PERSONAL_CONTEXT_FILE if path is None else Path(path)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    return text.strip()
+
+
+def compose_system_prompt(personal_context: str) -> str:
+    """The character prompt, plus a personal-context section when there is text."""
+    context = personal_context.strip()
+    if not context:
+        return _CHARACTER
+    return f"{_CHARACTER.rstrip()}\n\n{_PERSONAL_CONTEXT_HEADING}\n{context}\n"
+
+
+SYSTEM_PROMPT = compose_system_prompt(load_personal_context())
 
 # ── Canned lines: said by the server with no model call ──────────────────────
 

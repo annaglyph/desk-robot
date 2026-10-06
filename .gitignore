@@ -19,6 +19,9 @@ firmware/include/secrets.h
 .env.*
 !.env.example
 
+# Private household facts injected into the prompt. See personal_context.example.txt.
+server/personal_context.txt
+
 # macOS and editors
 .DS_Store
 .vscode/
