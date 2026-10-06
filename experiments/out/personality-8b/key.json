@@ -1,0 +1,65 @@
+{
+  "seed": 3123318867239821067,
+  "note": "A and B in audition.md. Isolated items were shuffled separately. The soup conversation uses one shuffle for every turn. haiku replies were reused from the 4B audition.",
+  "isolated": [
+    {
+      "id": "greeting",
+      "A": "qwen8b",
+      "B": "haiku"
+    },
+    {
+      "id": "silly",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "kettle",
+      "A": "qwen8b",
+      "B": "haiku"
+    },
+    {
+      "id": "humans",
+      "A": "qwen8b",
+      "B": "haiku"
+    },
+    {
+      "id": "compliment",
+      "A": "qwen8b",
+      "B": "haiku"
+    },
+    {
+      "id": "criticism",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "leaving",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "returning",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "unknown",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "ship",
+      "A": "haiku",
+      "B": "qwen8b"
+    },
+    {
+      "id": "lunch",
+      "A": "qwen8b",
+      "B": "haiku"
+    }
+  ],
+  "soup": {
+    "A": "qwen8b",
+    "B": "haiku"
+  }
+}

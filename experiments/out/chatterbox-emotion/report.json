@@ -1,0 +1,86 @@
+{
+  "sentence": "The pin is wrong. Check the config.",
+  "sample_rate": 24000,
+  "lines": [
+    {
+      "label": "neutral-a",
+      "text": "The pin is wrong. Check the config.",
+      "gen_s": 1.502,
+      "audio_s": 2.357,
+      "rms": 0.0283,
+      "f0_median_hz": 200.0,
+      "f0_std_hz": 54.7,
+      "wav": "experiments/out/chatterbox-emotion/neutral-a.wav"
+    },
+    {
+      "label": "neutral-b",
+      "text": "The pin is wrong. Check the config.",
+      "gen_s": 0.819,
+      "audio_s": 2.397,
+      "rms": 0.0356,
+      "f0_median_hz": 233.0,
+      "f0_std_hz": 43.3,
+      "wav": "experiments/out/chatterbox-emotion/neutral-b.wav"
+    },
+    {
+      "label": "happy",
+      "text": "[happy] The pin is wrong. Check the config.",
+      "gen_s": 0.723,
+      "audio_s": 2.118,
+      "rms": 0.0379,
+      "f0_median_hz": 255.3,
+      "f0_std_hz": 45.0,
+      "wav": "experiments/out/chatterbox-emotion/happy.wav"
+    },
+    {
+      "label": "sad",
+      "text": "[sad] The pin is wrong. Check the config.",
+      "gen_s": 1.017,
+      "audio_s": 2.958,
+      "rms": 0.0417,
+      "f0_median_hz": 227.5,
+      "f0_std_hz": 34.2,
+      "wav": "experiments/out/chatterbox-emotion/sad.wav"
+    },
+    {
+      "label": "angry",
+      "text": "[angry] The pin is wrong. Check the config.",
+      "gen_s": 0.741,
+      "audio_s": 2.158,
+      "rms": 0.0303,
+      "f0_median_hz": 228.6,
+      "f0_std_hz": 45.3,
+      "wav": "experiments/out/chatterbox-emotion/angry.wav"
+    },
+    {
+      "label": "surprised",
+      "text": "[surprised] The pin is wrong. Check the config.",
+      "gen_s": 0.802,
+      "audio_s": 2.438,
+      "rms": 0.0567,
+      "f0_median_hz": 260.9,
+      "f0_std_hz": 33.3,
+      "wav": "experiments/out/chatterbox-emotion/surprised.wav"
+    },
+    {
+      "label": "sleepy",
+      "text": "[sleepy] The pin is wrong. Check the config.",
+      "gen_s": 1.119,
+      "audio_s": 3.478,
+      "rms": 0.0304,
+      "f0_median_hz": 226.4,
+      "f0_std_hz": 62.4,
+      "wav": "experiments/out/chatterbox-emotion/sleepy.wav"
+    },
+    {
+      "label": "thinking",
+      "text": "[thinking] The pin is wrong. Check the config.",
+      "gen_s": 1.091,
+      "audio_s": 2.797,
+      "rms": 0.0368,
+      "f0_median_hz": 230.8,
+      "f0_std_hz": 31.4,
+      "wav": "experiments/out/chatterbox-emotion/thinking.wav"
+    }
+  ]
+}

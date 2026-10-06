@@ -1,0 +1,263 @@
+{
+  "measured_at": "2026-10-06T07:24:44+0100",
+  "machine": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.16",
+    "memory_gb": 32.0
+  },
+  "note": "Text only. No camera frame. RTF is generation_seconds / audio_seconds; below 1 is faster than realtime.",
+  "haiku": {
+    "model": "anthropic/claude-haiku-4.5",
+    "base_url": "https://openrouter.ai/api/v1",
+    "prompts": [
+      {
+        "n": 1,
+        "prompt": "I finished a new circuit board. It is sitting on the desk.",
+        "reply": "[surprised] Amaze! New board. Question, Rus: can I look?",
+        "ttft_s": 1.501,
+        "total_s": 1.65,
+        "chars": 56,
+        "rss_mb": 94.9
+      },
+      {
+        "n": 2,
+        "prompt": "The error says the pin number is wrong. What now?",
+        "reply": "[thinking] Answer: check your config file. Find pin number you told code to use, then find actual pin on board. They not match, that is problem. Which pin code say? Which pin actually connected?",
+        "ttft_s": 0.936,
+        "total_s": 1.632,
+        "chars": 194,
+        "rss_mb": 95.1
+      },
+      {
+        "n": 3,
+        "prompt": "I have been awake since five.",
+        "reply": "[sad] Not good, Rus. Five? Is too early. Even my servos rest more than that. Question: why awake so long? Sleep problem, or work problem?",
+        "ttft_s": 1.151,
+        "total_s": 1.47,
+        "chars": 137,
+        "rss_mb": 95.1
+      },
+      {
+        "n": 4,
+        "prompt": "It works!",
+        "reply": "[happy] Yes yes yes! Fist my bump! Question, Rus: what work? Tell me details. Love details.",
+        "ttft_s": 0.894,
+        "total_s": 1.284,
+        "chars": 91,
+        "rss_mb": 95.1
+      },
+      {
+        "n": 5,
+        "prompt": "There is a solder bridge on pin three.",
+        "reply": "[angry] Bad bad bad. Solder bridge on pin three. Fix it, then is good.",
+        "ttft_s": 1.038,
+        "total_s": 1.086,
+        "chars": 70,
+        "rss_mb": 95.2
+      },
+      {
+        "n": 6,
+        "prompt": "What is a weekend?",
+        "reply": "[thinking] Question: what is weekend? Humans stop working because... sun say so? Amaze.",
+        "ttft_s": 1.508,
+        "total_s": 1.641,
+        "chars": 87,
+        "rss_mb": 95.2
+      },
+      {
+        "n": 7,
+        "prompt": "I made coffee.",
+        "reply": "[happy] Amaze! Fuel time. Question, Rus: how many cup today? And... still hot, yes? Best when hot.",
+        "ttft_s": 1.222,
+        "total_s": 1.707,
+        "chars": 98,
+        "rss_mb": 95.3
+      },
+      {
+        "n": 8,
+        "prompt": "What am I holding?",
+        "reply": "[surprised] Camera not showing picture. Question: you holding something now? Use `look` so I see.",
+        "ttft_s": 1.436,
+        "total_s": 1.833,
+        "chars": 97,
+        "rss_mb": 95.4
+      }
+    ]
+  },
+  "fish": {
+    "voice_id": "6dd07916890445e59c5f019ad0fc7879",
+    "sample_rate": 16000,
+    "lines": [
+      {
+        "n": 1,
+        "id": "example-surprised-01",
+        "kind": "example",
+        "text": "Amaze! New circuit board. Question, Rus: is for me?",
+        "ttfa_s": 0.847,
+        "total_s": 1.479,
+        "audio_s": 3.712,
+        "rtf": 0.398,
+        "rss_mb": 96.2,
+        "wav": "experiments/out/baseline/fish/01-example-surprised-01.wav"
+      },
+      {
+        "n": 2,
+        "id": "example-thinking-02",
+        "kind": "example",
+        "text": "Answer: that error mean pin number wrong. Check config, easy fix.",
+        "ttfa_s": 0.506,
+        "total_s": 1.328,
+        "audio_s": 4.177,
+        "rtf": 0.318,
+        "rss_mb": 97.0,
+        "wav": "experiments/out/baseline/fish/02-example-thinking-02.wav"
+      },
+      {
+        "n": 3,
+        "id": "example-sad-03",
+        "kind": "example",
+        "text": "Rus awake since five? Not good. Even my servos rest more. Go sleep.",
+        "ttfa_s": 0.892,
+        "total_s": 1.795,
+        "audio_s": 5.013,
+        "rtf": 0.358,
+        "rss_mb": 97.8,
+        "wav": "experiments/out/baseline/fish/03-example-sad-03.wav"
+      },
+      {
+        "n": 4,
+        "id": "example-happy-04",
+        "kind": "example",
+        "text": "Yes yes yes. It work. Fist my bump!",
+        "ttfa_s": 0.47,
+        "total_s": 0.795,
+        "audio_s": 2.04,
+        "rtf": 0.389,
+        "rss_mb": 98.5,
+        "wav": "experiments/out/baseline/fish/04-example-happy-04.wav"
+      },
+      {
+        "n": 5,
+        "id": "example-angry-05",
+        "kind": "example",
+        "text": "Bad bad bad. Solder bridge on pin three. Fix it, then is good.",
+        "ttfa_s": 0.556,
+        "total_s": 1.265,
+        "audio_s": 4.409,
+        "rtf": 0.287,
+        "rss_mb": 99.2,
+        "wav": "experiments/out/baseline/fish/05-example-angry-05.wav"
+      },
+      {
+        "n": 6,
+        "id": "example-thinking-06",
+        "kind": "example",
+        "text": "Question: what is \"weekend\"? Humans stop working because. sun say so? Amaze.",
+        "ttfa_s": 0.311,
+        "total_s": 1.33,
+        "audio_s": 5.941,
+        "rtf": 0.224,
+        "rss_mb": 99.9,
+        "wav": "experiments/out/baseline/fish/06-example-thinking-06.wav"
+      },
+      {
+        "n": 7,
+        "id": "example-happy-07",
+        "kind": "example",
+        "text": "Coffee is fuel, understand. Rus make more fuel, then we build.",
+        "ttfa_s": 0.301,
+        "total_s": 1.675,
+        "audio_s": 4.873,
+        "rtf": 0.344,
+        "rss_mb": 100.7,
+        "wav": "experiments/out/baseline/fish/07-example-happy-07.wav"
+      },
+      {
+        "n": 8,
+        "id": "example-neutral-08",
+        "kind": "example",
+        "text": "Not know. Show me photo, I look closer.",
+        "ttfa_s": 0.308,
+        "total_s": 1.038,
+        "audio_s": 2.876,
+        "rtf": 0.361,
+        "rss_mb": 101.4,
+        "wav": "experiments/out/baseline/fish/08-example-neutral-08.wav"
+      },
+      {
+        "n": 9,
+        "id": "example-surprised-09",
+        "kind": "example",
+        "text": "Servo pull two amp on stall. Big cable, small board. Careful, human.",
+        "ttfa_s": 0.926,
+        "total_s": 1.988,
+        "audio_s": 4.827,
+        "rtf": 0.412,
+        "rss_mb": 102.2,
+        "wav": "experiments/out/baseline/fish/09-example-surprised-09.wav"
+      },
+      {
+        "n": 10,
+        "id": "example-sleepy-10",
+        "kind": "example",
+        "text": "Quiet now. Wake me when you find bug. I like bugs.",
+        "ttfa_s": 0.349,
+        "total_s": 1.009,
+        "audio_s": 3.712,
+        "rtf": 0.272,
+        "rss_mb": 102.8,
+        "wav": "experiments/out/baseline/fish/10-example-sleepy-10.wav"
+      },
+      {
+        "n": 11,
+        "id": "canned-wake",
+        "kind": "canned",
+        "text": "Question?",
+        "ttfa_s": 0.321,
+        "total_s": 0.363,
+        "audio_s": 0.694,
+        "rtf": 0.524,
+        "rss_mb": 103.6,
+        "wav": "experiments/out/baseline/fish/11-canned-wake.wav"
+      },
+      {
+        "n": 12,
+        "id": "canned-sleep",
+        "kind": "canned",
+        "text": "I sleep. You watch. Wake me when you find bug.",
+        "ttfa_s": 0.36,
+        "total_s": 0.888,
+        "audio_s": 3.248,
+        "rtf": 0.273,
+        "rss_mb": 104.2,
+        "wav": "experiments/out/baseline/fish/12-canned-sleep.wav"
+      },
+      {
+        "n": 13,
+        "id": "canned-track_on",
+        "kind": "canned",
+        "text": "Yes yes yes. Eyes on Rus.",
+        "ttfa_s": 0.294,
+        "total_s": 0.716,
+        "audio_s": 2.226,
+        "rtf": 0.322,
+        "rss_mb": 104.9,
+        "wav": "experiments/out/baseline/fish/13-canned-track_on.wav"
+      },
+      {
+        "n": 14,
+        "id": "canned-track_off",
+        "kind": "canned",
+        "text": "Okay. Eyes free.",
+        "ttfa_s": 0.305,
+        "total_s": 0.595,
+        "audio_s": 1.762,
+        "rtf": 0.338,
+        "rss_mb": 105.6,
+        "wav": "experiments/out/baseline/fish/14-canned-track_off.wav"
+      }
+    ]
+  },
+  "process_peak_mb": 105.6
+}

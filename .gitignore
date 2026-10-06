@@ -5,8 +5,13 @@ firmware/.vscode/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 server/.venv/
 .venv/
+# ".venv/" does not match experiment envs such as .venv-vision
+.venv*/
 
 # Secrets — never commit WiFi or API credentials
 firmware/include/secrets.h
@@ -18,10 +23,29 @@ firmware/include/secrets.h
 .DS_Store
 .vscode/
 .idea/
+*.code-workspace
 
 # Logs and audio captures
 *.log
 *.wav
+
+# Downloaded weights and model caches (Hugging Face, MLX, PyTorch).
+# The YuNet face model already tracked under server/models/ stays tracked.
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.npz
+.cache/
+
+# Generated experiment media. Scripts and small JSON/Markdown reports stay.
+experiments/out/**/*.jpg
+experiments/out/**/*.jpeg
+experiments/out/**/*.png
+experiments/out/**/*.mp3
+experiments/out/**/*.flac
+experiments/out/**/*.ogg
 
 # Mic debug recordings
 server/debug/

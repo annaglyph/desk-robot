@@ -1,0 +1,125 @@
+{
+  "measured_at": "2026-10-06T10:18:00+0100",
+  "machine": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.16",
+    "memory_gb": 32.0
+  },
+  "jpeg": "experiments/out/vision/frame.jpg",
+  "jpeg_bytes": 40763,
+  "note": "Each question is a fresh chat with the same JPEG. The user message matches thinking.py: question, camera note, image_url data URL. max_tokens=200, stream=True. Personality and tools are not part of this run.",
+  "system": "Answer the question about the attached camera picture. Be brief and literal. If the picture does not show it, say that.",
+  "camera_note": "(Live picture from your camera, taken just now, because the question seems to be about what you can see. If it isn't, ignore the picture.)",
+  "haiku": {
+    "model": "anthropic/claude-haiku-4.5",
+    "base_url": "https://openrouter.ai/api/v1",
+    "lines": [
+      {
+        "question": "What can you see?",
+        "reply": "I can see a person with curly hair and glasses wearing a striped shirt over a white undershirt. They are positioned in front of a modern interior with white walls and glass partitions/windows behind them. The space appears to be an office or contemporary building interior with recessed lighting visible in the ceiling.",
+        "error": null,
+        "ttft_s": 3.436,
+        "total_s": 4.142,
+        "chars": 319,
+        "server_rss_mb": null
+      },
+      {
+        "question": "What am I holding?",
+        "reply": "You are not visibly holding anything in this picture. Your hands are not visible in the frame.",
+        "error": null,
+        "ttft_s": 1.306,
+        "total_s": 1.646,
+        "chars": 94,
+        "server_rss_mb": null
+      },
+      {
+        "question": "What colour is it?",
+        "reply": "The person in the picture has curly brown hair and is wearing glasses with a pink/rose tint frame. They're wearing a light blue striped shirt over a white shirt.",
+        "error": null,
+        "ttft_s": 1.439,
+        "total_s": 2.0,
+        "chars": 161,
+        "server_rss_mb": null
+      },
+      {
+        "question": "How many fingers am I holding up?",
+        "reply": "The picture does not show any fingers being held up. The person in the image is not displaying their hands or fingers.",
+        "error": null,
+        "ttft_s": 1.48,
+        "total_s": 1.568,
+        "chars": 118,
+        "server_rss_mb": null
+      },
+      {
+        "question": "Read this.",
+        "reply": "The picture shows a man with curly hair and glasses wearing a striped shirt over a white t-shirt. He is indoors in front of glass-walled offices or rooms with white frames and overhead lighting visible in the background.",
+        "error": null,
+        "ttft_s": 1.446,
+        "total_s": 1.806,
+        "chars": 220,
+        "server_rss_mb": null
+      }
+    ]
+  },
+  "qwen": {
+    "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+    "server": "mlx-vlm 0.7.6, mlx_vlm.server, thinking off",
+    "weights": "2.9 GB on disk",
+    "base_url": "http://127.0.0.1:8091/v1",
+    "first_start_including_download_s": 329.6,
+    "download_s": 327.0,
+    "cold_load_from_disk_s": 1.2,
+    "process_start_to_ready_s": 3.7,
+    "rss_after_load_mb": 3310.3,
+    "server_pid": 17047,
+    "rss_after_mb": 3375.7,
+    "lines": [
+      {
+        "question": "What can you see?",
+        "reply": "A man with curly, graying hair and glasses, wearing a striped shirt over a white t-shirt, is looking at the camera. Behind him is a white wall with two windows; through the windows, you can see a lit hallway with framed pictures on the wall. The room has a white ceiling with a fluorescent light fixture.",
+        "error": null,
+        "ttft_s": 3.951,
+        "total_s": 4.832,
+        "chars": 304,
+        "server_rss_mb": 3373.9
+      },
+      {
+        "question": "What am I holding?",
+        "reply": "You are not holding anything. The image shows a person looking at the camera, with no visible object being held.",
+        "error": null,
+        "ttft_s": 0.984,
+        "total_s": 1.293,
+        "chars": 112,
+        "server_rss_mb": 3375.1
+      },
+      {
+        "question": "What colour is it?",
+        "reply": "The person in the picture has curly blonde or light brown hair, wears glasses with brown frames, and is dressed in a striped shirt over a white t-shirt. The background is a white wall with windows and fluorescent lighting. The room appears to be indoors with neutral lighting.",
+        "error": null,
+        "ttft_s": 0.983,
+        "total_s": 1.719,
+        "chars": 276,
+        "server_rss_mb": 3375.2
+      },
+      {
+        "question": "How many fingers am I holding up?",
+        "reply": "0",
+        "error": null,
+        "ttft_s": 0.982,
+        "total_s": 1.002,
+        "chars": 1,
+        "server_rss_mb": 3375.5
+      },
+      {
+        "question": "Read this.",
+        "reply": "A man with curly, graying hair and glasses is looking at the camera. He is wearing a striped button-down shirt over a white t-shirt. Behind him is a white wall with two rectangular windows or glass panels, showing a reflection of a room with fluorescent lighting and framed pictures on the wall. The ceiling is white and has a recessed light fixture.",
+        "error": null,
+        "ttft_s": 0.985,
+        "total_s": 1.943,
+        "chars": 350,
+        "server_rss_mb": 3375.7
+      }
+    ]
+  }
+}

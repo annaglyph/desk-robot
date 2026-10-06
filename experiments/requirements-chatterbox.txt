@@ -1,0 +1,2 @@
+# Separate from server/requirements.txt. Rocky does not import this.
+mlx-audio==0.5.8
