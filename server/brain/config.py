@@ -24,15 +24,16 @@ ROBOT_NAME = "Rocky"
 # stays out of the repo; "friend" until you do.
 HUMAN_NAME = os.environ.get("HUMAN_NAME", "friend")
 
-# Home Assistant is optional and read-only. It is not a Rocky ability.
-# brain/home_assistant.py reads these from the environment when it is used
-# (this file only loads server/.env). Leave them unset and a lookup returns
-# not_configured; Rocky still starts. The token is never copied onto this
-# module. Entity ids are HOME_ASSISTANT_ENTITY_<NAME> for the allow-list in
-# that module (see server/.env.example). A blank id returns
-# entity_not_configured.
+# Home Assistant is optional and read-only. Rocky's get_home_state ability
+# asks brain/home_assistant.py for one HA_* name. This file only loads
+# server/.env; it does not copy the token onto this module. Leave the hub
+# unset and a lookup returns not_configured; Rocky still starts. Each
+# HA_<NAME> line is one semantic name he may read (see .env.example).
+# A reading is not permission to change the device. Live values stay out
+# of the system prompt. Restart to pick up a changed file.
 #   HOME_ASSISTANT_URL
 #   HOME_ASSISTANT_TOKEN
+#   HA_POOL_TEMPERATURE
 
 # Language model. The brain speaks the OpenAI-style chat API, which
 # OpenRouter, Anthropic and OpenAI all serve. Put the key in server/.env as

@@ -9,10 +9,12 @@ The request is the OpenAI-style chat API, which OpenRouter, Anthropic and
 OpenAI all serve, so the provider is a base URL and the model is a string
 (config.LLM_BASE_URL / config.MODEL; the key is LLM_API_KEY in server/.env).
 
-Rocky has two real abilities the model can call (tool use): `look` moves
-the head and comes back with a fresh camera frame from the new angle, and
-`track_face` starts/stops following the human. main.py supplies the
-functions that actually do those things.
+Rocky has real abilities the model can call (tool use): `look` moves the
+head and comes back with a fresh camera frame from the new angle, and
+`track_face` starts/stops following the human. `get_home_state` is added
+when Home Assistant readings are configured; the names come from that
+adapter, not from this prompt. main.py supplies the functions that
+actually do those things. Live house readings are not part of this prompt.
 """
 
 from __future__ import annotations
@@ -67,8 +69,7 @@ def limited_sentences(text: str, limit: int) -> tuple[list[str], bool]:
 # An action returns (text for the model, optional fresh camera JPEG).
 Action = Callable[[dict], tuple[str, bytes | None]]
 
-TOOLS = [
-    {
+_LOOK = {
         "type": "function",
         "function": {
             "name": "look",
@@ -105,8 +106,9 @@ TOOLS = [
                 "required": ["direction"],
             },
         },
-    },
-    {
+}
+
+_TRACK = {
         "type": "function",
         "function": {
             "name": "track_face",
@@ -117,8 +119,73 @@ TOOLS = [
                 "required": ["on"],
             },
         },
-    },
-]
+}
+
+
+def _home_description(names: list[str]) -> str:
+    """Behaviour for any house, plus the names this process may read."""
+    available = ", ".join(names)
+    return (
+        f"Read one current value from {config.HUMAN_NAME}'s home. "
+        "This is how you learn a live temperature, how far something has progressed, "
+        "or whether a device is on. You can only read. You cannot change a device. "
+        "Call it when your human asks for a current or live reading or state. "
+        "One semantic name per call. When more than one reading is needed, "
+        "call this tool again for each name. "
+        "Do not call it merely because a place, device, or topic was mentioned. "
+        "How something works, a usual or recommended temperature, and anything "
+        "your human already told you are not requests for a live reading. "
+        "Pass only a semantic name from the list. Never pass a Home Assistant "
+        "entity id. "
+        "The result is JSON. When ok is true, say the value and unit, and do not "
+        "invent a different number or anything the result does not contain. "
+        "When ok is false, error says why (not configured, unavailable, "
+        "invalid state, authentication failure, or connection failure). "
+        "Say you could not read it. Never invent a value. "
+        f"Available states: {available}."
+    )
+
+
+def _home_tool(names: list[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_home_state",
+            "description": _home_description(names),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": list(names),
+                        "description": (
+                            "The semantic reading to fetch. One name only. "
+                            "Never a Home Assistant entity id."
+                        ),
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    }
+
+
+def build_tools(names: list[str]) -> list:
+    """look, track_face, and get_home_state when `names` is non-empty.
+
+    `names` is the adapter's semantic catalogue. An empty catalogue omits
+    get_home_state. The list does not read the environment.
+    """
+    tools = [_LOOK, _TRACK]
+    ordered = sorted({name for name in names if isinstance(name, str) and "." not in name and name})
+    if ordered:
+        tools.append(_home_tool(ordered))
+    return tools
+
+
+# Tests that do not pass a tool list advertise look and track_face only.
+# Production passes build_tools(adapter.names) at startup.
+TOOLS = build_tools(())
 
 
 @dataclass
@@ -137,7 +204,7 @@ def _image_part(jpeg: bytes) -> dict:
 
 
 class RobotBrain:
-    def __init__(self, actions: dict[str, Action] | None = None) -> None:
+    def __init__(self, actions: dict[str, Action] | None = None, tools: list | None = None) -> None:
         self.client = openai.OpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=os.environ.get("LLM_API_KEY", "missing"),
@@ -145,6 +212,7 @@ class RobotBrain:
         )
         self.history: list[dict] = []
         self.actions = actions or {}
+        self.tools = TOOLS if tools is None else tools
         self.emotion = "neutral"        # emotion of the reply in progress
         self._inflight: tuple[int, dict] | None = None  # (index, user message) being answered
 
@@ -248,7 +316,7 @@ class RobotBrain:
                 model=config.MODEL,
                 max_tokens=200,  # backstop; the sentence limit does the real work
                 messages=[{"role": "system", "content": personality.SYSTEM_PROMPT}, *self.history],
-                tools=TOOLS if self.actions else openai.NOT_GIVEN,
+                tools=self.tools if self.actions else openai.NOT_GIVEN,
                 stream=True,
             )
             raw: list[str] = []      # everything the model wrote this round

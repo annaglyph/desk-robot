@@ -18,9 +18,10 @@ from unittest.mock import patch
 from brain import home_assistant, thinking
 from brain.home_assistant import (
     ERRORS,
-    CATALOG,
+    MAX_READINGS,
     HomeAssistant,
     Reading,
+    readings_from_env,
     urllib_get,
 )
 
@@ -278,28 +279,32 @@ class ContractTests(unittest.TestCase):
         ha = HomeAssistant.from_env({
             "HOME_ASSISTANT_URL": URL,
             "HOME_ASSISTANT_TOKEN": TOKEN,
-            "HOME_ASSISTANT_ENTITY_POOL_TEMPERATURE": "sensor.pool_temperature",
+            "HA_POOL_TEMPERATURE": "sensor.pool_temperature",
+            "HA_OFFICE_TEMPERATURE": "text:sensor.office_status",
         })
         self.assertEqual(ha._url, URL)
         self.assertTrue(ha._token == TOKEN)
+        self.assertEqual(ha.names, ["office_temperature", "pool_temperature"])
         self.assertEqual(ha._entities["pool_temperature"].entity_id, "sensor.pool_temperature")
         self.assertTrue(ha._entities["pool_temperature"].numeric)
-        self.assertEqual(ha._entities["office_temperature"].entity_id, "")
-        self.assertEqual(ha._entities["printer_bed_temp"].entity_id, "")
+        self.assertFalse(ha._entities["office_temperature"].numeric)
+        self.assertEqual(ha._entities["office_temperature"].entity_id, "sensor.office_status")
         empty = HomeAssistant.from_env({})
-        assert_failure(self, empty.get_state("pool_temperature"), "not_configured")
+        self.assertEqual(empty.names, [])
+        assert_failure(self, empty.get_state("pool_temperature"), "unknown_name")
 
     def test_empty_mapping_does_not_fall_through_to_the_process_environment(self):
         with patch.dict(os.environ, {
             "HOME_ASSISTANT_URL": "http://from-process.example:8123",
             "HOME_ASSISTANT_TOKEN": "process-token-not-from-dotenv",
+            "HA_POOL_TEMPERATURE": "sensor.from_process",
             "HOME_ASSISTANT_ENTITY_POOL_TEMPERATURE": "sensor.from_process",
         }):
             ha = HomeAssistant.from_env({})
-        assert_failure(self, ha.get_state("pool_temperature"), "not_configured")
+        assert_failure(self, ha.get_state("pool_temperature"), "unknown_name")
         self.assertEqual(ha._url, "")
         self.assertEqual(ha._token, "")
-        self.assertEqual(ha._entities["pool_temperature"].entity_id, "")
+        self.assertEqual(ha.names, [])
 
     def test_implicit_environment_loads_project_dotenv_before_reading(self):
         """The smoke test passes no mapping, so from_env must load server/.env first."""
@@ -313,12 +318,12 @@ assert "brain.config" not in sys.modules
 from brain.home_assistant import HomeAssistant
 ha = HomeAssistant.from_env()
 assert "brain.config" in sys.modules
-ready = bool(ha._url and ha._token and ha._entities["pool_temperature"].entity_id)
-sys.stdout.write("configured\\n" if ready else "missing\\n")
+sys.stdout.write("loaded\\n")
+sys.stdout.write(" ".join(ha.names) + "\\n")
 """
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("HOME_ASSISTANT_"):
+            if key.startswith("HOME_ASSISTANT_") or key.startswith("HA_"):
                 del env[key]
         env["PYTHONPATH"] = str(server)
         proc = subprocess.run(
@@ -330,22 +335,101 @@ sys.stdout.write("configured\\n" if ready else "missing\\n")
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "configured\n")
+        self.assertTrue(proc.stdout.startswith("loaded\n"), proc.stdout)
+        self.assertNotIn(".", proc.stdout)
         self.assertNotIn("Bearer", proc.stdout)
         self.assertNotIn("Bearer", proc.stderr)
 
-    def test_catalog_is_the_five_readings(self):
-        self.assertEqual(
-            list(CATALOG),
-            [
-                "pool_temperature",
-                "office_temperature",
-                "printer_progress",
-                "printer_nozzle_temp",
-                "printer_bed_temp",
-            ],
-        )
-        self.assertTrue(all(CATALOG.values()))
+    def test_ha_keys_become_sorted_semantic_names(self):
+        entities, warnings = readings_from_env({
+            "HA_POOL_TEMPERATURE": "sensor.pool_temperature",
+            "HA_LIVING_ROOM_TEMPERATURE": "number:sensor.living_room_temperature",
+            "HA_OFFICE_TEMPERATURE": "sensor.office_temperature",
+            "HA_PRINTER_PROGRESS": "sensor.printer_progress",
+            "HA_PRINTER_NOZZLE_TEMP": "sensor.printer_nozzle_temperature",
+            "HA_PRINTER_BED_TEMP": "sensor.printer_bed_temperature",
+            "LLM_API_KEY": "not-a-reading",
+        })
+        self.assertEqual(warnings, [])
+        self.assertEqual(list(entities), [
+            "living_room_temperature",
+            "office_temperature",
+            "pool_temperature",
+            "printer_bed_temp",
+            "printer_nozzle_temp",
+            "printer_progress",
+        ])
+        self.assertTrue(all(item.numeric for item in entities.values()))
+        self.assertEqual(entities["living_room_temperature"].entity_id, "sensor.living_room_temperature")
+        self.assertNotIn("sensor.living_room_temperature", "".join(warnings))
+
+
+class CatalogueTests(unittest.TestCase):
+    def test_text_is_opt_in_and_a_bare_value_stays_numeric(self):
+        err = io.StringIO()
+        with patch("sys.stderr", err):
+            ha = HomeAssistant.from_env({
+                "HOME_ASSISTANT_URL": URL,
+                "HOME_ASSISTANT_TOKEN": TOKEN,
+                "HA_OFFICE_DESK_LAMP": "text:switch.office_desk_lamp",
+                "HA_POOL_TEMPERATURE": "sensor.pool_temperature",
+            })
+        self.assertEqual(ha._entities["office_desk_lamp"].entity_id, "switch.office_desk_lamp")
+        self.assertFalse(ha._entities["office_desk_lamp"].numeric)
+        self.assertTrue(ha._entities["pool_temperature"].numeric)
+        fetch = FakeFetch(200, ha_body("on", None))
+        ha._fetch = fetch
+        result = ha.get_state("office_desk_lamp")
+        self.assertEqual(result, {"ok": True, "name": "office_desk_lamp", "value": "on", "unit": None})
+        self.assertNotIn("switch.office_desk_lamp", json.dumps(result))
+        self.assertNotIn("switch.", err.getvalue())
+        self.assertFalse(hasattr(ha, "call_service"))
+
+    def test_numeric_prefix_and_rejected_values_name_the_key_only(self):
+        secret = "pasted-token-value-should-not-appear"
+        entities, warnings = readings_from_env({
+            "HA_POOL_TEMPERATURE": "number:sensor.pool_temperature",
+            "HA_BAD_PREFIX": "switch:" + secret,
+            "HA_TOKEN": secret,
+            "ha_pool_temperature": "sensor.pool_temperature",
+            "HA_pool_temperature": "sensor.pool_temperature",
+            "HA_": "sensor.pool_temperature",
+            "HA__POOL": "sensor.pool_temperature",
+            "HOME_ASSISTANT_ENTITY_POOL_TEMPERATURE": "sensor.old_pool",
+            "HOME_ASSISTANT_URL": URL,
+        })
+        self.assertEqual(list(entities), ["pool_temperature"])
+        self.assertTrue(entities["pool_temperature"].numeric)
+        blob = "\n".join(warnings)
+        self.assertIn("HA_BAD_PREFIX", blob)
+        self.assertIn("HA_TOKEN", blob)
+        self.assertIn("HA_pool_temperature", blob)
+        self.assertIn("HA__POOL", blob)
+        self.assertIn("HOME_ASSISTANT_ENTITY_POOL_TEMPERATURE", blob)
+        self.assertNotIn(secret, blob)
+        self.assertNotIn("sensor.", blob)
+        self.assertNotIn("ha_pool_temperature", blob)
+        self.assertNotIn("HOME_ASSISTANT_URL", blob)
+
+    def test_the_thirty_third_reading_is_dropped_by_key_name(self):
+        env = {
+            f"HA_N{index:02d}": f"sensor.n_{index:02d}"
+            for index in range(MAX_READINGS + 1)
+        }
+        entities, warnings = readings_from_env(env)
+        self.assertEqual(len(entities), MAX_READINGS)
+        self.assertNotIn("n32", entities)
+        self.assertIn("HA_N32", "\n".join(warnings))
+        self.assertNotIn("sensor.n_32", "\n".join(warnings))
+        self.assertEqual(list(entities), sorted(entities))
+
+    def test_a_text_sensor_accepts_words_and_a_number_sensor_does_not(self):
+        ha = HomeAssistant(URL, TOKEN, {
+            "printer_status": Reading("sensor.printer_status", False),
+            "pool_temperature": Reading("sensor.pool_temperature", True),
+        }, fetch=FakeFetch(200, ha_body("idle", None)))
+        self.assertEqual(ha.get_state("printer_status")["value"], "idle")
+        assert_failure(self, ha.get_state("pool_temperature"), "invalid_state")
 
 
 class TransportTests(unittest.TestCase):
@@ -423,15 +507,24 @@ class ProductionBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(HomeAssistant, "set_state"))
         self.assertFalse(hasattr(HomeAssistant, "control_light"))
 
-    def test_get_home_state_is_not_a_production_tool(self):
-        names = [tool["function"]["name"] for tool in thinking.TOOLS]
-        self.assertEqual(names, ["look", "track_face"])
-        self.assertNotIn("get_home_state", names)
-        for filename in ("thinking.py", "personality.py", "main.py"):
-            text = (_BRAIN / filename).read_text()
-            self.assertNotIn("get_home_state", text, filename)
-            self.assertNotIn("HomeAssistant", text, filename)
-            self.assertNotIn("home_assistant", text, filename)
+    def test_get_home_state_is_a_read_only_tool_and_not_personality(self):
+        names = [tool["function"]["name"] for tool in thinking.build_tools(["pool_temperature"])]
+        self.assertEqual(names, ["look", "track_face", "get_home_state"])
+        self.assertEqual(
+            [tool["function"]["name"] for tool in thinking.build_tools([])],
+            ["look", "track_face"],
+        )
+        character = (_BRAIN / "personality.py").read_text()
+        self.assertNotIn("get_home_state", character)
+        self.assertNotIn("HOME_ASSISTANT", character)
+        self.assertNotIn("pool_temperature", character)
+        example = Path(__file__).resolve().parents[1] / "personal_context.example.txt"
+        self.assertNotIn("HOME_ASSISTANT", example.read_text())
+        main_text = (_BRAIN / "main.py").read_text()
+        self.assertIn("get_home_state", main_text)
+        self.assertNotIn("HOME_ASSISTANT_TOKEN", main_text)
+        self.assertNotIn("/api/states", main_text)
+        self.assertNotIn("/api/services", main_text)
 
 
 class SmokeCommandTests(unittest.TestCase):
@@ -484,19 +577,31 @@ class SmokeCommandTests(unittest.TestCase):
              patch("sys.stdout", out), patch("sys.stderr", err):
             code = home_assistant.main([])
         self.assertEqual(code, 1)
-        printed = json.loads(out.getvalue())
-        self.assertEqual(
-            [item["name"] for item in printed],
-            ["pool_temperature", "office_temperature", "printer_progress"],
-        )
-        self.assertTrue(all(item["error"] == "not_configured" for item in printed))
+        self.assertEqual(json.loads(out.getvalue()), [])
+        self.assertIn("HA_<NAME>", err.getvalue())
         self.assertIn("HOME_ASSISTANT_URL", err.getvalue())
         self.assertIn("HOME_ASSISTANT_TOKEN", err.getvalue())
         self.assertNotIn(TOKEN, out.getvalue() + err.getvalue())
 
+    def test_smoke_with_no_args_reads_the_configured_names(self):
+        fetch = FakeFetch(200, ha_body("17", "°C"))
+        ha = HomeAssistant(URL, TOKEN, {
+            "pool_temperature": Reading("sensor.pool_temperature", True),
+            "office_temperature": Reading("sensor.office_temperature", True),
+        }, fetch=fetch)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(HomeAssistant, "from_env", return_value=ha), \
+             patch("sys.stdout", out), patch("sys.stderr", err):
+            code = home_assistant.main([])
+        self.assertEqual(code, 0)
+        printed = json.loads(out.getvalue())
+        self.assertEqual([item["name"] for item in printed], ["pool_temperature", "office_temperature"])
+        self.assertNotIn("sensor.", out.getvalue())
+        self.assertNotIn(TOKEN, out.getvalue() + err.getvalue())
+
     def test_smoke_names_a_missing_entity_mapping(self):
         ha = HomeAssistant(URL, TOKEN, {
-            name: Reading("", True) for name in CATALOG
+            "printer_progress": Reading("", True),
         })
         out, err = io.StringIO(), io.StringIO()
         with patch.object(HomeAssistant, "from_env", return_value=ha), \
@@ -504,7 +609,7 @@ class SmokeCommandTests(unittest.TestCase):
             code = home_assistant.main(["printer_progress"])
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(out.getvalue())[0]["error"], "entity_not_configured")
-        self.assertIn("HOME_ASSISTANT_ENTITY_PRINTER_PROGRESS", err.getvalue())
+        self.assertIn("HA_PRINTER_PROGRESS", err.getvalue())
         self.assertNotIn(TOKEN, out.getvalue() + err.getvalue())
 
 

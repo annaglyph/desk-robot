@@ -42,8 +42,8 @@ import time
 
 import websockets
 
-from . import config, mouth, personality
-from .thinking import Interrupted, RobotBrain
+from . import config, home_assistant, mouth, personality
+from .thinking import Interrupted, RobotBrain, build_tools
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
 from .tracker import Tracker
@@ -391,9 +391,31 @@ def _sync(coro_fn):
 
 
 main_loop: asyncio.AbstractEventLoop | None = None
+_home: home_assistant.HomeAssistant | None = None
+
+
+def open_home() -> home_assistant.HomeAssistant:
+    """The one adapter for this process. Created on first use, then reused."""
+    global _home
+    if _home is None:
+        _home = home_assistant.HomeAssistant.from_env()
+    return _home
+
+
+def configured_tools() -> list:
+    """The tool list for this process. Home names come from the adapter."""
+    return build_tools(open_home().names)
+
+
+def get_home_state(args: dict) -> tuple[str, bytes | None]:
+    """One configured reading. The same adapter supplies the tool's names."""
+    return home_assistant.state_for_tool(open_home(), args)
+
+
 ABILITIES = {
     "look": _sync(look),
     "track_face": _sync(lambda args: set_tracking(bool(args.get("on", True)))),
+    "get_home_state": get_home_state,
 }
 
 
@@ -1006,7 +1028,10 @@ async def main() -> None:
     global tracker, brain, main_loop
     loop = asyncio.get_running_loop()
     main_loop = loop
-    brain = RobotBrain(ABILITIES)
+    home = open_home()
+    shown = ", ".join(home.names) if home.names else "none"
+    print(f"home readings: {shown}")
+    brain = RobotBrain(ABILITIES, configured_tools())
     tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
     eyes.has_annotator = True
     tracker.start()

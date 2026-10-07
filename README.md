@@ -384,8 +384,10 @@ different panel. The expressions themselves are drawn in `face.cpp`.
 - **Brain** (`server/brain/`): `ears.py` turns audio into text with
   faster-whisper, using Silero VAD to find speech and Smart Turn
   (`turn.py`) to decide when you have finished. `thinking.py` talks to the
-  model, streams the reply sentence by sentence, and gives the model two
-  tools: `look` (move the head, take a picture) and `track_face`.
+  model, streams the reply sentence by sentence, and gives the model
+  `look` (move the head, take a picture), `track_face`, and, when
+  `HA_*` names are set in `server/.env`, `get_home_state` (read one of
+  those current values). A reading cannot change the device.
   `mouth.py` turns text into audio with Fish Audio and levels it for the
   small speaker. `tracker.py` follows faces with OpenCV. `eyes.py` serves
   the console page. `main.py` ties it together.

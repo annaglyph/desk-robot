@@ -1,15 +1,18 @@
 """Read-only Home Assistant states.
 
-Asks Home Assistant for one allow-listed entity and always returns a
-structured result. This is not a Rocky ability: it is not in TOOLS, and
-nothing here can call a service or change a device.
+Asks Home Assistant for one configured entity and always returns a
+structured result. Rocky's get_home_state ability is a thin call to
+get_state (see state_for_tool). Nothing here can call a service or
+change a device. An HA_* entry permits a read only.
 
-Configuration is server/.env (see .env.example). Missing configuration
-returns not_configured.
+Configuration is server/.env (see .env.example). HOME_ASSISTANT_URL and
+HOME_ASSISTANT_TOKEN are the hub. Each HA_<NAME> line is one semantic
+name Rocky may read. A name that was not configured returns unknown_name.
+A hub that is not configured returns not_configured.
 
 From the server/ directory:
 
-  python -m brain.home_assistant pool_temperature office_temperature printer_progress
+  python -m brain.home_assistant pool_temperature office_temperature
 """
 
 from __future__ import annotations
@@ -28,15 +31,11 @@ from dataclasses import dataclass
 
 import certifi
 
-# Names Rocky may ask for, and whether the state must be a number.
-# Entity ids are not here: they come from HOME_ASSISTANT_ENTITY_<NAME>.
-CATALOG: dict[str, bool] = {
-    "pool_temperature": True,
-    "office_temperature": True,
-    "printer_progress": True,
-    "printer_nozzle_temp": True,
-    "printer_bed_temp": True,
-}
+# How many HA_* readings one process will offer the model.
+MAX_READINGS = 32
+# HA_POOL_TEMPERATURE -> pool_temperature. Uppercase words, no empty gaps.
+_HA_KEY = re.compile(r"^HA_[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$")
+_MAX_NAME = 64
 
 ERRORS = frozenset({
     "not_configured",
@@ -61,7 +60,11 @@ Fetch = Callable[[str, str, float], tuple[int, bytes]]
 
 @dataclass(frozen=True)
 class Reading:
-    """One allow-listed name. An empty entity_id is not configured."""
+    """One readable name. An empty entity_id is not configured.
+
+    numeric is True unless the setting explicitly says text:. There is
+    no write permission on this object.
+    """
 
     entity_id: str
     numeric: bool
@@ -212,6 +215,93 @@ def _timeout(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError)
 
 
+def _semantic_name(key: str) -> str | None:
+    """pool_temperature from HA_POOL_TEMPERATURE, or None when the key is unfit."""
+    if not _HA_KEY.fullmatch(key):
+        return None
+    name = key[3:].lower()
+    if len(name) > _MAX_NAME:
+        return None
+    return name
+
+
+def _parse_reading(value: str) -> tuple[str, Reading | None]:
+    """('ok', reading), ('blank', None), or ('bad', None).
+
+    A bare entity id is numeric. number: is the same. text: is a short
+    string. The type is never guessed from the entity id's domain.
+    """
+    text = value.strip()
+    if not text:
+        return "blank", None
+    numeric = True
+    entity = text
+    if text.startswith("text:"):
+        numeric = False
+        entity = text[5:].strip()
+    elif text.startswith("number:"):
+        entity = text[7:].strip()
+    elif ":" in text:
+        return "bad", None
+    if not entity or not _ENTITY_ID.fullmatch(entity):
+        return "bad", None
+    return "ok", Reading(entity, numeric)
+
+
+def _warn_obsolete(key: str) -> str:
+    return (
+        f"Ignoring {key}. Home readings use HA_<NAME> in server/.env "
+        "(see .env.example)."
+    )
+
+
+def _warn_bad_key(key: str) -> str:
+    return f"Ignoring {key}. A Home reading name is HA_ followed by uppercase words."
+
+
+def _warn_bad_value(key: str) -> str:
+    return f"Ignoring {key}. It is not a readable Home Assistant entity."
+
+
+def _warn_cap(key: str) -> str:
+    return f"Ignoring {key}. At most {MAX_READINGS} Home Assistant readings are allowed."
+
+
+def readings_from_env(env: Mapping[str, str]) -> tuple[dict[str, Reading], list[str]]:
+    """Semantic names from HA_* keys, and warnings that name keys only.
+
+    The mapping is used alone. Blank values are unset. Old
+    HOME_ASSISTANT_ENTITY_* keys are ignored. At most MAX_READINGS names
+    are kept, in alphabetical order. Warning text never includes a value.
+    """
+    warnings: list[str] = []
+    valid: list[tuple[str, str, Reading]] = []
+    for key in sorted(k for k in env if isinstance(k, str)):
+        raw = env.get(key, "")
+        if key.startswith("HOME_ASSISTANT_ENTITY_"):
+            if isinstance(raw, str) and raw.strip():
+                warnings.append(_warn_obsolete(key))
+            continue
+        if not key.startswith("HA_"):
+            continue
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        name = _semantic_name(key)
+        if name is None:
+            warnings.append(_warn_bad_key(key))
+            continue
+        status, reading = _parse_reading(raw)
+        if status != "ok" or reading is None:
+            warnings.append(_warn_bad_value(key))
+            continue
+        valid.append((name, key, reading))
+    valid.sort(key=lambda item: item[0])
+    kept = valid[:MAX_READINGS]
+    for _name, key, _reading in valid[MAX_READINGS:]:
+        warnings.append(_warn_cap(key))
+    return {name: reading for name, _key, reading in kept}, warnings
+
+
 class HomeAssistant:
     """GET /api/states/<entity_id> for names in the allow-list."""
 
@@ -233,13 +323,19 @@ class HomeAssistant:
     def __repr__(self) -> str:
         return f"HomeAssistant(url={self._url!r})"
 
+    @property
+    def names(self) -> list[str]:
+        """Semantic names Rocky may read, in catalogue order."""
+        return list(self._entities)
+
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "HomeAssistant":
         """Settings from the environment. A blank value means unset.
 
         With no mapping, brain.config loads server/.env first, then the
         process environment is read. An explicit mapping, including {},
-        is used alone and does not touch that file.
+        is used alone and does not touch that file. Warnings name rejected
+        keys and are written to stderr. They do not include values.
         """
         if environ is None:
             from . import config  # loads server/.env into os.environ
@@ -247,10 +343,9 @@ class HomeAssistant:
             env = os.environ
         else:
             env = environ
-        entities = {
-            name: Reading(env.get(f"HOME_ASSISTANT_ENTITY_{name.upper()}", "").strip(), numeric)
-            for name, numeric in CATALOG.items()
-        }
+        entities, warnings = readings_from_env(env)
+        for line in warnings:
+            print(line, file=sys.stderr)
         return cls(
             env.get("HOME_ASSISTANT_URL", ""),
             env.get("HOME_ASSISTANT_TOKEN", ""),
@@ -289,6 +384,18 @@ class HomeAssistant:
         return _interpret(name, body, reading.numeric)
 
 
+def state_for_tool(client: HomeAssistant, args: object) -> tuple[str, None]:
+    """JSON text of one adapter result, and no camera image.
+
+    The model passes one semantic name. This does not interpret Home
+    Assistant itself: get_state does, and its dict is serialized as-is.
+    A failure is that error object, never a blank string and never a
+    guessed reading.
+    """
+    name = args.get("name") if isinstance(args, dict) else None
+    return json.dumps(client.get_state(name), ensure_ascii=False), None
+
+
 def _hints(results: list[dict], url: str) -> None:
     """Tell a person which settings are missing. Never the token."""
     if any(item.get("error") == "not_configured" for item in results):
@@ -301,13 +408,12 @@ def _hints(results: list[dict], url: str) -> None:
         if item.get("error") != "entity_not_configured":
             continue
         name = item.get("name") or "that name"
-        if isinstance(name, str):
-            env_name = "HOME_ASSISTANT_ENTITY_" + name.upper()
+        if isinstance(name, str) and name:
+            env_name = "HA_" + name.upper()
         else:
-            env_name = "HOME_ASSISTANT_ENTITY_<NAME>"
+            env_name = "HA_<NAME>"
         print(
-            f"{name} has no entity id. Set {env_name} in server/.env "
-            "to the Home Assistant entity id.",
+            f"{name} has no entity id. Set {env_name} in server/.env.",
             file=sys.stderr,
         )
     if any(item.get("error") == "authentication_failed" for item in results):
@@ -324,19 +430,25 @@ def _hints(results: list[dict], url: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Print structured results for the named readings. Exit 1 if any failed."""
     args = list(sys.argv[1:] if argv is None else argv)
+    client = HomeAssistant.from_env()
     if args in (["-h"], ["--help"]):
         print(
             "usage: python -m brain.home_assistant [name ...]",
             file=sys.stderr,
         )
-        print("names: " + ", ".join(CATALOG), file=sys.stderr)
+        shown = ", ".join(client.names) if client.names else "(none)"
+        print("names: " + shown, file=sys.stderr)
         return 0
-    names = args or [
-        "pool_temperature",
-        "office_temperature",
-        "printer_progress",
-    ]
-    client = HomeAssistant.from_env()
+    names = args or list(client.names)
+    if not names:
+        print(
+            "No Home Assistant readings are configured. Set HOME_ASSISTANT_URL, "
+            "HOME_ASSISTANT_TOKEN, and HA_<NAME> in server/.env (see .env.example).",
+            file=sys.stderr,
+        )
+        json.dump([], sys.stdout)
+        sys.stdout.write("\n")
+        return 1
     results = [client.get_state(name) for name in names]
     json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
