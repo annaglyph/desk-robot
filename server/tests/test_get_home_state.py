@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from brain import config, home_assistant, thinking
 from brain.home_assistant import HomeAssistant, Reading, state_for_tool
+from brain.home_control import HomeControl
 
 SECRET = "ha-token-do-not-log"
 URL = "http://homeassistant.local:8123"
@@ -168,20 +169,43 @@ class SchemaTests(unittest.TestCase):
             self.assertNotIn(banned, names)
 
     def test_description_keeps_the_rules_and_lists_configured_names(self):
-        text = home_tool()["description"]
+        tool = home_tool()
+        text = tool["description"]
         self.assertIn(config.HUMAN_NAME, text)
         self.assertIn("how you learn", text)
         self.assertIn("temperature", text)
         self.assertIn("progressed", text)
         self.assertIn("device is on", text)
-        self.assertIn("current or live reading or state", text)
+        self.assertIn("what is true now", text)
         self.assertIn("You can only read.", text)
         self.assertIn("cannot change a device", text)
+        self.assertIn("with this tool", text)
+        self.assertNotIn("control_light", text)
         self.assertIn("One semantic name per call.", text)
         self.assertIn("call this tool again for each name", text)
         self.assertIn("merely because a place, device, or topic was mentioned", text)
-        self.assertIn("already told you", text)
+        self.assertIn(thinking._device_identity(SAMPLE_NAMES), text)
+        self.assertIn('"living room temperature" identifies living_room_temperature.', text)
+        self.assertIn('"room temperature" does not identify living_room_temperature.', text)
+        self.assertIn(
+            "All meaningful words from the listed name, in order, are required to identify it.",
+            text,
+        )
+        self.assertIn("One listed name is not a default.", text)
+        self.assertIn("before you answer", text)
+        self.assertIn("what was true then", text)
+        self.assertIn("not what is true now", text)
+        self.assertIn("earlier control result", text)
+        self.assertIn("Call this tool again before you state the current value.", text)
+        self.assertIn("a fact your human states", text)
+        self.assertIn("what was said", text)
+        self.assertNotIn("already told you", text)
+        self.assertNotIn("is the only truth", text)
         self.assertIn("Never pass a Home Assistant entity id.", text)
+        self.assertIn(
+            "The listed name the human identified exactly.",
+            tool["parameters"]["properties"]["name"]["description"],
+        )
         self.assertIn("value and unit", text)
         self.assertIn("Never invent a value.", text)
         self.assertIn("not configured", text)
@@ -203,7 +227,12 @@ class SchemaTests(unittest.TestCase):
         from brain import personality
 
         bare = personality.compose_system_prompt("")
-        self.assertNotIn("get_home_state", bare)
+        self.assertIn("A live reading from the home is not one of those facts.", bare)
+        self.assertIn("`get_home_state` says what is true now.", bare)
+        self.assertIn("named exactly", bare)
+        self.assertIn("One configured item is not a default.", bare)
+        self.assertIn("no reading first", bare)
+        self.assertIn("do not call `get_home_state` or `control_light`.", bare)
         self.assertNotIn("pool_temperature", bare)
         self.assertNotIn("HOME_ASSISTANT", bare)
         self.assertNotIn(SECRET, personality.SYSTEM_PROMPT)
@@ -507,6 +536,7 @@ class AbilityTests(unittest.TestCase):
         fetch = FakeFetch(200, ha_body("17", "°C"))
         sentinel = make_client(fetch)
         main._home = None
+        main._control = HomeControl(URL, SECRET, {})
         try:
             with patch.object(HomeAssistant, "from_env", return_value=sentinel) as made:
                 first, image = main.get_home_state({"name": "pool_temperature"})
@@ -515,7 +545,11 @@ class AbilityTests(unittest.TestCase):
             made.assert_called_once_with()
         finally:
             main._home = None
-        enum = advertised[-1]["function"]["parameters"]["properties"]["name"]["enum"]
+            main._control = None
+        names = [tool["function"]["name"] for tool in advertised]
+        self.assertNotIn("control_light", names)
+        home = next(tool for tool in advertised if tool["function"]["name"] == "get_home_state")
+        enum = home["function"]["parameters"]["properties"]["name"]["enum"]
         self.assertEqual(enum, sorted(sentinel.names))
         self.assertNotIn("sensor.", json.dumps(advertised))
         self.assertNotIn(SECRET, json.dumps(advertised))

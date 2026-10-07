@@ -271,8 +271,9 @@ def readings_from_env(env: Mapping[str, str]) -> tuple[dict[str, Reading], list[
     """Semantic names from HA_* keys, and warnings that name keys only.
 
     The mapping is used alone. Blank values are unset. Old
-    HOME_ASSISTANT_ENTITY_* keys are ignored. At most MAX_READINGS names
-    are kept, in alphabetical order. Warning text never includes a value.
+    HOME_ASSISTANT_ENTITY_* keys are ignored. HA_CONTROL_* keys are not
+    readings. At most MAX_READINGS names are kept, in alphabetical order.
+    Warning text never includes a value.
     """
     warnings: list[str] = []
     valid: list[tuple[str, str, Reading]] = []
@@ -281,6 +282,8 @@ def readings_from_env(env: Mapping[str, str]) -> tuple[dict[str, Reading], list[
         if key.startswith("HOME_ASSISTANT_ENTITY_"):
             if isinstance(raw, str) and raw.strip():
                 warnings.append(_warn_obsolete(key))
+            continue
+        if key.startswith("HA_CONTROL_"):
             continue
         if not key.startswith("HA_"):
             continue

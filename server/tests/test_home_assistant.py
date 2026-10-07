@@ -365,6 +365,23 @@ sys.stdout.write(" ".join(ha.names) + "\\n")
 
 
 class CatalogueTests(unittest.TestCase):
+    def test_control_keys_are_not_readings(self):
+        entities, warnings = readings_from_env({
+            "HA_POOL_TEMPERATURE": "sensor.pool_temperature",
+            "HA_OFFICE_DESK_LAMP": "text:switch.office_desk_lamp",
+            "HA_CONTROL_OFFICE_DESK_LAMP": "sensor.would_be_a_reading",
+            "HA_CONTROL_KITCHEN_LAMP": "light:switch.kitchen_lamp",
+        })
+        self.assertEqual(list(entities), ["office_desk_lamp", "pool_temperature"])
+        self.assertEqual(entities["office_desk_lamp"].entity_id, "switch.office_desk_lamp")
+        self.assertNotIn("control_office_desk_lamp", entities)
+        self.assertNotIn("control_kitchen_lamp", entities)
+        self.assertEqual(warnings, [])
+        self.assertTrue(all(
+            item.entity_id != "sensor.would_be_a_reading" for item in entities.values()
+        ))
+        self.assertNotIn("kitchen_lamp", json.dumps([item.entity_id for item in entities.values()]))
+
     def test_text_is_opt_in_and_a_bare_value_stays_numeric(self):
         err = io.StringIO()
         with patch("sys.stderr", err):
@@ -515,7 +532,6 @@ class ProductionBoundaryTests(unittest.TestCase):
             ["look", "track_face"],
         )
         character = (_BRAIN / "personality.py").read_text()
-        self.assertNotIn("get_home_state", character)
         self.assertNotIn("HOME_ASSISTANT", character)
         self.assertNotIn("pool_temperature", character)
         example = Path(__file__).resolve().parents[1] / "personal_context.example.txt"

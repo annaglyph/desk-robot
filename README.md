@@ -387,7 +387,9 @@ different panel. The expressions themselves are drawn in `face.cpp`.
   model, streams the reply sentence by sentence, and gives the model
   `look` (move the head, take a picture), `track_face`, and, when
   `HA_*` names are set in `server/.env`, `get_home_state` (read one of
-  those current values). A reading cannot change the device.
+  those current values). A reading cannot change the device. When
+  `HA_CONTROL_*` lights are set, `control_light` turns those lights on
+  or off.
   `mouth.py` turns text into audio with Fish Audio and levels it for the
   small speaker. `tracker.py` follows faces with OpenCV. `eyes.py` serves
   the console page. `main.py` ties it together.
@@ -413,7 +415,8 @@ cd server && python -m unittest tests/test_personality.py tests/test_segmenter.p
   hosts. Opening it to the LAN would let anyone on your WiFi watch the
   camera and read transcripts.
 - **Voice is unauthenticated by design.** Anyone in earshot can say "hey
-  Rocky". All he can do is move his head and spend a fraction of a cent.
+  Rocky". He can move his head, spend a fraction of a cent, and turn an
+  authorised light on or off when `HA_CONTROL_*` is set.
 - **What leaves your computer:** each question sends the transcript, the recent
   conversation, your name from `HUMAN_NAME`, and the newest camera frame
   (only for visual questions) to your model provider, and each reply's text

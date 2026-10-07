@@ -42,7 +42,7 @@ import time
 
 import websockets
 
-from . import config, home_assistant, mouth, personality
+from . import config, home_assistant, home_control, mouth, personality
 from .thinking import Interrupted, RobotBrain, build_tools
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
@@ -392,19 +392,28 @@ def _sync(coro_fn):
 
 main_loop: asyncio.AbstractEventLoop | None = None
 _home: home_assistant.HomeAssistant | None = None
+_control: home_control.HomeControl | None = None
 
 
 def open_home() -> home_assistant.HomeAssistant:
-    """The one adapter for this process. Created on first use, then reused."""
+    """The one read adapter for this process. Created on first use, then reused."""
     global _home
     if _home is None:
         _home = home_assistant.HomeAssistant.from_env()
     return _home
 
 
+def open_control() -> home_control.HomeControl:
+    """The one light-control adapter. Created on first use, then reused."""
+    global _control
+    if _control is None:
+        _control = home_control.HomeControl.from_env()
+    return _control
+
+
 def configured_tools() -> list:
-    """The tool list for this process. Home names come from the adapter."""
-    return build_tools(open_home().names)
+    """The tool list for this process. Readings and lights come from their adapters."""
+    return build_tools(open_home().names, open_control().names)
 
 
 def get_home_state(args: dict) -> tuple[str, bytes | None]:
@@ -412,11 +421,24 @@ def get_home_state(args: dict) -> tuple[str, bytes | None]:
     return home_assistant.state_for_tool(open_home(), args)
 
 
+def control_light(args: dict) -> tuple[str, bytes | None]:
+    """Turn one authorised light on or off. Absent from the brain when none are configured."""
+    return home_control.set_light_for_tool(open_control(), args)
+
+
 ABILITIES = {
     "look": _sync(look),
     "track_face": _sync(lambda args: set_tracking(bool(args.get("on", True)))),
     "get_home_state": get_home_state,
 }
+
+
+def configured_actions() -> dict:
+    """Abilities for this process. control_light exists only when a light is authorised."""
+    actions = dict(ABILITIES)
+    if open_control().names:
+        actions["control_light"] = control_light
+    return actions
 
 
 def wants_camera(question: str) -> bool:
@@ -1031,7 +1053,10 @@ async def main() -> None:
     home = open_home()
     shown = ", ".join(home.names) if home.names else "none"
     print(f"home readings: {shown}")
-    brain = RobotBrain(ABILITIES, configured_tools())
+    lights = open_control()
+    shown_lights = ", ".join(lights.names) if lights.names else "none"
+    print(f"home lights: {shown_lights}")
+    brain = RobotBrain(configured_actions(), configured_tools())
     tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
     eyes.has_annotator = True
     tracker.start()
