@@ -55,8 +55,8 @@ uint8_t demoEmotionIdx = 0;
 void printHelp() {
   Serial.println(F("desk-robot commands:"));
   Serial.println(F("  emo <name>   neutral|happy|sad|angry|surprised|sleepy|thinking"));
-  Serial.println(F("  pan <deg>    turn head, -60..60 (0 = center)"));
-  Serial.println(F("  tilt <deg>   nod head, -60 (down)..0 (level)"));
+  Serial.println(F("  pan <deg>    turn head, -70..70 (0 = center, negative = left)"));
+  Serial.println(F("  tilt <deg>   nod head, -75 (down)..37 (up), 0 = level"));
   Serial.println(F("  center       head to center on both axes"));
   Serial.println(F("  raw pan|tilt <deg>  calibration move that ignores the limits (watch it!)"));
   Serial.println(F("  blink        blink now"));
@@ -189,7 +189,7 @@ void setup() {
 
   face.begin();
   panNeck.begin(PIN_SERVO_PAN, PAN_MIN_DEG, PAN_MAX_DEG, PAN_MAX_SPEED,
-                SERVO_RELAX_MS, PAN_TRIM_DEG, /*glanceRange=*/25.0f);
+                SERVO_RELAX_MS, PAN_TRIM_DEG, /*glanceRange=*/25.0f, PAN_INVERT);
   tiltNeck.begin(PIN_SERVO_TILT, TILT_MIN_DEG, TILT_MAX_DEG, TILT_MAX_SPEED,
                  SERVO_RELAX_MS, TILT_TRIM_DEG, /*glanceRange=*/10.0f,
                  TILT_INVERT);

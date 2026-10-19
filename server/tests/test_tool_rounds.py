@@ -76,7 +76,7 @@ class LookDescriptionTests(unittest.TestCase):
         self.assertNotIn("whenever", text.lower())
         self.assertEqual(
             look["parameters"]["properties"]["direction"]["enum"],
-            ["left", "right", "down", "level", "center"],
+            ["left", "right", "down", "up", "level", "center"],
         )
 
     def test_track_face_is_unchanged(self):

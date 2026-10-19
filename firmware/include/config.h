@@ -24,19 +24,20 @@ constexpr uint8_t PIN_I2S_DIN = 3;  // D2 → MAX98357A DIN
 // Most SH1106 modules answer at address 0x3C; U8g2 finds it automatically.
 
 // ─── Motion limits ───────────────────────────────────────────────────────────
-constexpr float PAN_MIN_DEG = -60.0f; // head turn limit, left
-constexpr float PAN_MAX_DEG = 60.0f;  // head turn limit, right
+constexpr float PAN_MIN_DEG = -70.0f; // head turn limit, left (pulse ~2288 us)
+constexpr float PAN_MAX_DEG = 70.0f;  // head turn limit, right (pulse ~811 us)
 constexpr float PAN_MAX_SPEED = 180.0f; // deg/sec ceiling — keeps motion gentle
-constexpr float PAN_TRIM_DEG = 0.0f;    // tweak if the head isn't straight at 0
+constexpr float PAN_TRIM_DEG = 9.47f;   // 1550 us horn neutral → head angle 0
+constexpr bool PAN_INVERT = true;       // a longer pulse turns this head left
 
-// The reference build: the tilt platform hits the pan servo body if it tries to
-// look above eye level, so 0 (eye level) is the ceiling and it only nods down.
-constexpr float TILT_MIN_DEG = -60.0f;  // look-down limit
-constexpr float TILT_MAX_DEG = 0.0f;    // look-up limit (eye level is the mechanical stop)
+// Custom pan/tilt. Eye level is 0. The head can look up to +37 and down to -75.
+// Pulses at these limits stay inside the measured safe windows:
+// pan 800–2300 us, tilt 700–1900 us.
+constexpr float TILT_MIN_DEG = -75.0f;  // look-down limit (pulse ~708 us)
+constexpr float TILT_MAX_DEG = 37.0f;   // look-up limit (pulse ~1890 us)
 constexpr float TILT_MAX_SPEED = 120.0f;
-constexpr float TILT_TRIM_DEG = 0.0f;   // tweak so the head sits level at 0
-constexpr bool TILT_INVERT = true;      // flip if `tilt -20` looks up instead of down
-                                        // (true on the Adafruit pan-tilt with the OLED facing forward)
+constexpr float TILT_TRIM_DEG = 4.74f;  // 1500 us horn neutral → head angle 0
+constexpr bool TILT_INVERT = false;     // a longer pulse tilts this head up
 
 // Watch the mechanism the first time tilt moves: if the bracket strains at
 // either end of travel, pull TILT_MIN/MAX in until it stops.

@@ -329,10 +329,12 @@ async def look(args: dict) -> tuple[str, bytes | None]:
         pan, move_pan = (-deg if d == "left" else deg), True
     elif d == "down":
         tilt, move_tilt = -(amount if amount is not None else 30.0), True  # a normal glance down; ask for degrees to go further
+    elif d == "up":
+        tilt, move_tilt = (amount if amount is not None else config.TRACK_TILT_MAX), True
     elif d == "level":
-        tilt, move_tilt = config.TRACK_TILT_MAX, True
+        tilt, move_tilt = 0.0, True  # eye level, not the top of the travel
     elif d == "center":
-        pan, tilt, move_pan, move_tilt = 0.0, config.TRACK_TILT_MAX, True, True
+        pan, tilt, move_pan, move_tilt = 0.0, 0.0, True, True
     if not (move_pan or move_tilt):
         return ("Say where to look: left, right, down, level, or center.", None)
     pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, pan))
@@ -354,7 +356,9 @@ async def look(args: dict) -> tuple[str, bytes | None]:
     if tilt <= config.TRACK_TILT_MIN + 0.5:
         tilt_word = "down, as far as it goes"
     elif tilt >= config.TRACK_TILT_MAX - 0.5:
-        tilt_word = "level, as high as it goes"
+        tilt_word = "up, as high as it goes"
+    elif tilt > 5:
+        tilt_word = "up"
     else:
         tilt_word = "down" if tilt < -5 else "level"
     where = f"Head is now at pan {pan:.0f} deg ({pan_word}), tilt {tilt:.0f} deg ({tilt_word})."
@@ -997,8 +1001,7 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
         awake_until = 0.0  # say() doesn't touch it, but be explicit
         return
     if woke:
-        # Heard his name: eyes open, perk up to eye level (tilt can't go
-        # above 0 on this build — the platform would hit the pan servo).
+        # Heard his name: eyes open, perk up to eye level (tilt 0).
         await send_to_robot({"type": "asleep", "on": False})
         await send_to_robot({"type": "emotion", "name": "surprised"})
         if tracker is None or not tracker.tracking:

@@ -228,9 +228,9 @@ TRACK_GAIN = 0.5           # fraction of the error corrected per frame (lower = 
 TRACK_DEADBAND = 0.10      # ignore errors smaller than this fraction of half-frame
 TRACK_PAN_SIGN = 1         # flip to -1 if the head turns AWAY from you
 TRACK_TILT_SIGN = 1        # flip to -1 if it nods the wrong way
-TRACK_PAN_LIMIT = 60.0     # must match PAN_MIN/MAX_DEG in firmware config.h
-TRACK_TILT_MIN = -60.0     # must match TILT_MIN/MAX_DEG in firmware config.h
-TRACK_TILT_MAX = 0.0
+TRACK_PAN_LIMIT = 70.0     # must match PAN_MIN/MAX_DEG in firmware config.h
+TRACK_TILT_MIN = -75.0     # must match TILT_MIN_DEG in firmware config.h
+TRACK_TILT_MAX = 37.0      # must match TILT_MAX_DEG in firmware config.h
 TRACK_LOST_SECONDS = 4.0   # no face this long → idle glances resume
 
 # How many conversation turns to remember before forgetting the oldest.

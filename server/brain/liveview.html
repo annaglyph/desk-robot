@@ -187,8 +187,8 @@
     <aside>
       <div class="card">
         <h2 class="label"><span>Head</span><span class="sub" id="headnote"></span></h2>
-        <div class="field"><span class="k">Pan</span><input type="range" id="pan" min="-60" max="60" step="1" value="0" aria-label="pan"><span class="v" id="panv">0°</span></div>
-        <div class="field"><span class="k">Tilt</span><input type="range" id="tilt" min="-60" max="0" step="1" value="0" aria-label="tilt"><span class="v" id="tiltv">0°</span></div>
+        <div class="field"><span class="k">Pan</span><input type="range" id="pan" min="-70" max="70" step="1" value="0" aria-label="pan"><span class="v" id="panv">0°</span></div>
+        <div class="field"><span class="k">Tilt</span><input type="range" id="tilt" min="-75" max="37" step="1" value="0" aria-label="tilt"><span class="v" id="tiltv">0°</span></div>
         <div class="row">
           <button data-act="center">Center and relax</button>
           <button id="trackbtn" data-act="track">Follow my face</button>
@@ -700,8 +700,8 @@
       $("viewport").classList.toggle("speaking", !!s.speaking);
       $("framenote").textContent = fresh ? (s.camera === "mac" ? (s.camera_name || "Mac camera") : "") : "no fresh frame";
       const pan = s.pan ?? 0, tilt = s.tilt ?? 0;
-      $("horizon").style.top = (50 + tilt * (25 / 60)) + "%";
-      $("meridian").style.left = (50 - pan * (38 / 60)) + "%";
+      $("horizon").style.top = (50 + tilt * (25 / 75)) + "%";
+      $("meridian").style.left = (50 - pan * (38 / 70)) + "%";
       $("rpan").textContent = "pan " + Math.round(pan) + "°"; $("rtilt").textContent = "tilt " + Math.round(tilt) + "°";
       $("rtrack").textContent = s.tracking ? "face locked" : s.tracking_enabled ? "looking for a face" : s.head_held ? "holding" : "not tracking";
       $("rtrack").className = s.tracking ? "" : "off";

@@ -84,24 +84,25 @@ _LOOK = {
                 "to look in a direction, always call it, even if you think your "
                 "head is already there: the result tells you where your head really "
                 "is and whether it is at a limit. left and right turn only; down "
-                "and level nod only; center is straight ahead and level. Describe "
-                "only what the image shows. Up is as high as 'level': your neck "
-                "cannot tilt above eye level."
+                "and up nod only; level is eye level; center is straight ahead "
+                "and level. You can look up about 37 degrees above eye level "
+                "and down about 75. Pan is about 70 degrees either side. "
+                "Describe only what the image shows."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "direction": {
                         "type": "string",
-                        "enum": ["left", "right", "down", "level", "center"],
+                        "enum": ["left", "right", "down", "up", "level", "center"],
                         "description": (
-                            "left/right turn the head only (no nod); down/level nod only (no turn); "
-                            "center = straight ahead and level"
+                            "left/right turn the head only (no nod); down/up/level nod only (no turn); "
+                            "level = eye level; center = straight ahead and level"
                         ),
                     },
                     "degrees": {
                         "type": "number",
-                        "description": "How far: 5-60 for left/right, 5-60 for down. Omit for a normal look.",
+                        "description": "How far: 5-70 for left/right, 5-75 for down, 5-37 for up. Omit for a normal look.",
                     },
                 },
                 "required": ["direction"],
