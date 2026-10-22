@@ -5,8 +5,13 @@
 // Mic: the Sense board's PDM microphone → 16 kHz mono s16le frames.
 //
 // A capture task reads the I2S peripheral in 30 ms chunks and drops each one
-// into a queue; loop() drains the queue and ships frames to the brain
-// (the WebSocket client isn't safe to call from another task).
+// into a queue of 16 (~0.5 s). If the queue is full the oldest frame is
+// dropped. loop() drains whatever is queued and ships it to the brain
+// (the WebSocket client isn't safe to call from another task). That drain
+// is not bounded: every queued frame is sent before the next command read.
+//
+// MIC_ENABLED=0 (see config.h) skips begin(): no PDM clock, no capture
+// task, and loop() does not transmit frames.
 
 class Mic {
  public:
@@ -19,6 +24,9 @@ class Mic {
 
   // Pops one captured frame into `out` (FRAME_BYTES). Returns false if none.
   bool nextFrame(uint8_t* out);
+
+  // Frames waiting to be sent. 0 when the capture task was not started.
+  int queued() const;
 
   // RMS (0..1) of the most recent frame, for level checks over serial.
   float level() const { return level_; }

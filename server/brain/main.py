@@ -36,6 +36,7 @@ import json
 import os
 import queue
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -43,6 +44,7 @@ import time
 import websockets
 
 from . import config, home_assistant, home_control, mouth, personality
+from .tcp_probe import SpeechSendTrace, read_send_path
 from .thinking import Interrupted, RobotBrain, build_tools
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
@@ -132,6 +134,56 @@ def pick_camera_source() -> None:
             print("seeing through the robot camera")
 
 
+def _robot_transport():
+    ws = robot_socket
+    if ws is None:
+        return None
+    return getattr(ws, "transport", None)
+
+
+def _robot_write_buffer_size() -> int | None:
+    """Bytes queued in asyncio, not yet accepted by the kernel.
+
+    The sampler thread only reads this length. It does not write the socket.
+    """
+    transport = _robot_transport()
+    if transport is None:
+        return None
+    try:
+        return int(transport.get_write_buffer_size())
+    except (AttributeError, OSError, RuntimeError):
+        return None
+
+
+def _robot_tcp_state() -> dict:
+    transport = _robot_transport()
+    sock = None
+    if transport is not None:
+        try:
+            sock = transport.get_extra_info("socket")
+        except (AttributeError, OSError, RuntimeError):
+            sock = None
+    return read_send_path(sock)
+
+
+def enable_tcp_nodelay(websocket: websockets.ServerConnection) -> int | None:
+    """Turn off Nagle on an accepted robot socket and read the option back.
+
+    Returns the value read back. It is 0 when Nagle is still on. macOS reports
+    a disabled Nagle algorithm as 4, Linux as 1, so any non-zero value means
+    the option is on. None means the socket could not be changed.
+    """
+    transport = websocket.transport
+    sock = transport.get_extra_info("socket") if transport is not None else None
+    if sock is None:
+        return None
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return int(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY))
+    except OSError:
+        return None
+
+
 async def handle_robot(websocket: websockets.ServerConnection) -> None:
     global robot_socket
     peer = websocket.remote_address[0] if websocket.remote_address else "?"
@@ -159,8 +211,13 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         print(f"(refused a second robot from {peer}: one is already connected)")
         await websocket.close(1013)
         return
+    nodelay = enable_tcp_nodelay(websocket)
     robot_socket = websocket
-    print(f"robot connected! (fw {hello.get('fw', '?')}, {peer})")
+    nodelay_state = "on" if nodelay else "off" if nodelay == 0 else "unset"
+    print(
+        f"robot connected! (fw {hello.get('fw', '?')}, {peer}, "
+        f"TCP_NODELAY={nodelay_state}, raw {nodelay})"
+    )
     pick_mic_source()
     pick_camera_source()
     if config.MIC_SOURCE in ("auto", "robot"):
@@ -588,6 +645,41 @@ class SpokenReply:
         self.sentences.put(None)  # wake the voice thread so it can exit
         self.audio.put(None)
 
+    async def _send_pcm_frame(self, frame: bytes, stats: dict, trace: SpeechSendTrace) -> None:
+        """Send one existing PCM frame and time that send. The bytes and the
+        socket call are the same as before. Timestamps are buffered; the
+        trace file is written after the utterance."""
+        ready_mono = time.monotonic()
+        ready_wall = time.time()
+        ready = time.perf_counter()
+        if stats["sent_at"] is not None:
+            gap_ms = (ready - stats["sent_at"]) * 1000
+            stats["gap_sum"] += gap_ms
+            stats["gap_n"] += 1
+            stats["gap_max"] = max(stats["gap_max"], gap_ms)
+        buf_send = _robot_write_buffer_size()
+        send_mono = time.monotonic()
+        send_wall = time.time()
+        started = time.perf_counter()
+        await robot_socket.send(frame)
+        send_ms = (time.perf_counter() - started) * 1000
+        done_mono = time.monotonic()
+        done_wall = time.time()
+        stats["sent_at"] = time.perf_counter()
+        stats["send_sum"] += send_ms
+        stats["n"] += 1
+        stats["send_max"] = max(stats["send_max"], send_ms)
+        buffered = _robot_write_buffer_size()
+        if buffered is None:
+            buffered = 0
+        stats["buf_max"] = max(stats["buf_max"], buffered)
+        if send_ms >= 50:
+            stats["slow"] += 1
+        trace.add_frame(
+            len(frame), ready_mono, ready_wall, send_mono, send_wall,
+            done_mono, done_wall, buf_send, buffered,
+        )
+
     async def _play_robot(self, first: bytes) -> None:
         """Stream PCM to the robot (docs/protocol.md) and wait until it has played."""
         robot_speak_done.clear()
@@ -596,24 +688,49 @@ class SpokenReply:
         self.tl.mark("speaking")
         buf = bytearray()
         total = 0
+        stats = {
+            "n": 0, "send_sum": 0.0, "send_max": 0.0,
+            "gap_n": 0, "gap_sum": 0.0, "gap_max": 0.0,
+            "buf_max": 0, "sent_at": None, "slow": 0,
+        }
+        trace = SpeechSendTrace(_robot_write_buffer_size, _robot_tcp_state)
         chunk: bytes | None = first
-        while chunk is not None:
-            buf += chunk
-            while len(buf) >= FRAME_BYTES:
-                if robot_socket is None:
-                    return
-                await robot_socket.send(b"\x01" + bytes(buf[:FRAME_BYTES]))
-                del buf[:FRAME_BYTES]
-                total += FRAME_BYTES
-            chunk = await self._next()
-        if buf and robot_socket is not None:
-            await robot_socket.send(b"\x01" + bytes(buf))
-            total += len(buf)
-        await send_to_robot({"type": "speak_end"})
         try:
-            await asyncio.wait_for(robot_speak_done.wait(), timeout=total / 32000 + 5)
-        except asyncio.TimeoutError:
-            print("(robot never said it finished speaking)")
+            trace.start()
+            while chunk is not None:
+                buf += chunk
+                while len(buf) >= FRAME_BYTES:
+                    if robot_socket is None:
+                        return
+                    await self._send_pcm_frame(b"\x01" + bytes(buf[:FRAME_BYTES]), stats, trace)
+                    del buf[:FRAME_BYTES]
+                    total += FRAME_BYTES
+                chunk = await self._next()
+            if buf and robot_socket is not None:
+                await self._send_pcm_frame(b"\x01" + bytes(buf), stats, trace)
+                total += len(buf)
+            await send_to_robot({"type": "speak_end"})
+            try:
+                await asyncio.wait_for(robot_speak_done.wait(), timeout=total / 32000 + 5)
+            except asyncio.TimeoutError:
+                print("(robot never said it finished speaking)")
+        finally:
+            try:
+                written = await self.loop.run_in_executor(None, trace.finish)
+            except Exception as exc:
+                written = None
+                print(f"(pcm trace not written: {exc})")
+            if stats["n"]:
+                gap_avg = stats["gap_sum"] / stats["gap_n"] if stats["gap_n"] else 0.0
+                print(
+                    "pcm send: "
+                    f"{stats['n']} frames, {total} bytes, "
+                    f"send avg/max {stats['send_sum'] / stats['n']:.0f}/{stats['send_max']:.0f} ms, "
+                    f"ready-gap avg/max {gap_avg:.0f}/{stats['gap_max']:.0f} ms, "
+                    f"buf max {stats['buf_max']}, slow {stats['slow']}"
+                )
+            if written is not None:
+                print(f"pcm trace: {written}")
 
     async def _play_mac(self, first: bytes) -> None:
         """No robot: play each sentence on the Mac as soon as it's complete."""

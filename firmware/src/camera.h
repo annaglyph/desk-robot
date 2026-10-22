@@ -8,6 +8,9 @@
 // latest one (copied into PSRAM). loop() picks it up with takeFrame() and
 // ships it to the brain, so a slow WiFi moment just skips frames instead
 // of piling them up.
+//
+// CAMERA_ENABLED=0 (see config.h) skips begin(): no sensor clock, no capture
+// task, and loop() does not transmit JPEGs. setStreaming() stays off.
 
 class Camera {
  public:

@@ -54,11 +54,34 @@ constexpr uint8_t PIN_PDM_DATA = 41;
 // says "too quiet", lower if loud speech clips.
 constexpr float MIC_GAIN = 6.0f;
 
+// Diagnostic switch. 0 skips PDM init, the capture task, and microphone
+// uplink. Incoming speaker audio, the OLED, the servos, Wi-Fi, and the
+// WebSocket stay up. The active value is -DMIC_ENABLED in platformio.ini.
+#ifndef MIC_ENABLED
+#define MIC_ENABLED 1
+#endif
+
+// 1 prints a 2 s timing summary and a line when one loop exceeds 50 ms.
+// Stages are the WebSocket read, microphone uplink, speaker-feed copy, and
+// the face/servo update. 0 leaves the loop silent.
+#ifndef LOOP_TIMING
+#define LOOP_TIMING 0
+#endif
+
 // ─── Camera ──────────────────────────────────────────────────────────────────
 // The camera is mounted ribbon-up on the head, which puts the sensor upside
 // down: flip + mirror = rotate 180 degrees.
 constexpr bool CAMERA_VFLIP = true;
 constexpr bool CAMERA_HMIRROR = true;
+
+// Diagnostic switch. 0 skips sensor init, the capture task, and JPEG
+// transmission so command latency and audio can be compared with the camera
+// off the bus. Wi-Fi, the WebSocket, the mic, the OLED, the speaker, and the
+// servos stay as they are. The active value is the -DCAMERA_ENABLED flag in
+// platformio.ini; this default applies only when that flag is absent.
+#ifndef CAMERA_ENABLED
+#define CAMERA_ENABLED 1
+#endif
 
 // ─── Speaker ─────────────────────────────────────────────────────────────────
 // 0.0-1.0 software volume for the MAX98357A. For more than 1.0 can give,
@@ -66,4 +89,9 @@ constexpr bool CAMERA_HMIRROR = true;
 constexpr float SPEAKER_VOLUME = 0.7f;
 
 // ─── Behavior ────────────────────────────────────────────────────────────────
-constexpr uint32_t FRAME_INTERVAL_MS = 33; // ~30 FPS face animation
+// Face animation and servo steps share this cadence. The per-step easing in
+// ServoNeck::update assumes it is called about this often.
+constexpr uint32_t FRAME_INTERVAL_MS = 33; // ~30 Hz
+// The OLED transfer blocks for ~30 ms, so it runs on its own slower timer.
+// 50 ms is 20 fps, inside the 15–20 fps diagnostic limit.
+constexpr uint32_t OLED_INTERVAL_MS = 50;

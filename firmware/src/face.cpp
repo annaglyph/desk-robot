@@ -366,8 +366,12 @@ void Face::render() {
   u8g2_.sendBuffer();
 }
 
-void Face::update(uint32_t nowMs) {
+void Face::step(uint32_t nowMs) {
   lastFrameMs_ = nowMs;
   stepAnimation(nowMs);
+}
+
+void Face::update(uint32_t nowMs) {
+  step(nowMs);
   render();
 }

@@ -13,6 +13,11 @@
 //   feed(pcm, n)   → append audio (any chunk size)
 //   endSpeech()    → no more audio coming; play out what's left, then idle
 //   onDone         → called (from the playback task) when playback finishes
+//
+// The link task is the writer (begin/feed/end, in protocol order). The
+// playback task is the reader. head_ and tail_ move only inside lock_.
+// A serial `beep` can also write, from the Arduino loop; the same lock
+// keeps the ring intact, though the bytes would interleave with speech.
 
 class Speaker {
  public:

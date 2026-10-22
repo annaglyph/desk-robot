@@ -10,6 +10,44 @@ itself, a reason to change anything.
 
 ---
 
+## Checkpoint — 22 October 2026
+
+The investigation is in [audio-transport-2026-10-22.md](audio-transport-2026-10-22.md).
+The cause of the remaining speaker glitches is not identified. Do not change
+frame size, the prebuffer, or I²S to hide them.
+
+### Open
+
+- Speaker audio is improved and sometimes clean, and still intermittently glitchy.
+- The microphone and the camera are compiled out. Turning either flag on before
+  uplink is queued does not restore them: `sendBinary` from the Arduino loop is
+  ignored. See the first step below.
+- The motion laboratory's smooth 16-bit PWM has been tested on the spare board.
+  Production easing and pulse generation are unchanged.
+- The tilt signal is still GPIO43, which is also UART0 TX. The boot-time
+  backward kick is recorded and the move to GPIO44 is deferred.
+- `LOOP_TIMING`, the WebSocket read probe, `TCP_NODELAY`, and the brain's
+  PCM/TCP trace are diagnostic. They should eventually be off unless a
+  compile-time or explicit switch turns them on. The firmware switches already
+  exist (`CAMERA_ENABLED`, `MIC_ENABLED`, `LOOP_TIMING` in
+  `firmware/platformio.ini`). The brain trace does not have a switch yet.
+
+### First step tomorrow
+
+Restore the microphone before the camera, without putting WebSocket sends back
+on the Arduino loop.
+
+The smallest safe change is a bounded uplink queue for microphone frames,
+modelled on the existing outbound JSON queue: the capture task or the loop
+only enqueues, the link task is the only sender, a full queue drops a frame
+and counts it, and one link-task turn sends at most one frame so incoming
+speaker audio is still read. Leave `MIC_ENABLED=0` for that build. Confirm a
+queued frame is sent and the control loop stays on its servo and OLED timers.
+Only then set `MIC_ENABLED=1`, keep `CAMERA_ENABLED=0` and `LOOP_TIMING=1`,
+and compare command latency and a speech trace with this checkpoint.
+
+---
+
 ## Home Assistant Control
 
 **Status:** ✅ V1 COMPLETE — October 2026
@@ -306,7 +344,7 @@ Until then, keep the implementation simple.
 
 ## Physical Robot Integration
 
-**Status:** Waiting for hardware
+**Status:** Body connected. Current hardware notes are in the 22 October 2026 checkpoint above.
 
 Some behaviours cannot be properly accepted using the Mac webcam/body fallback.
 
@@ -412,6 +450,104 @@ the Lively preset.
 
 **Important:** Preserve the smooth 16-bit PWM output, existing easing curves,
 and coordinated pan/tilt movements established during hardware testing.
+
+### Awake / Idle / Sleep Lifecycle
+
+**Status:** Future development — not for immediate implementation.
+
+Rocky should only do expressive idle movement while awake. After a stretch
+without meaningful interaction he should return to neutral, stop, and use
+the sleep behaviour that already exists.
+
+#### What exists today
+
+Inactivity is measured only in the Python brain. `AWAKE_SECONDS` is 60.
+`awake_until` is set when a heard utterance is accepted, when a finished
+reply ends, when the console turns sleep off, and when the wake phrase is
+heard. `doze_loop` checks about once a second. He stays awake while a reply
+is being composed (`thinking`) or spoken (`ears.muted`), even if the clock
+has run out. The firmware has no inactivity timer.
+
+The clock resets on meaningful speech. It does not reset for camera frames,
+face tracking, OLED animation, or the firmware's own glance timer. Speech
+that starts after the clock has expired is ignored unless it contains the
+wake phrase.
+
+Sleep is entered three ways: the awake clock expires, a sleep phrase
+(`goodnight`, `go to sleep`, and the phrases in `SLEEP_PHRASES`), or the
+console sleep control. The brain then sends `asleep` on. A sleep phrase
+also plays the goodnight line first. The firmware `sleep` command only
+changes the face: eyes shut, slow breathing, Z's. It does not move the
+head and it does not stop the microphone, the camera stream, or the
+WebSocket. Those keep running for as long as the brain is connected.
+Disconnecting the brain does not put the face to sleep. It does turn the
+USB demo emotion cycle back on, and idle head glances stay off because
+they require a connected brain.
+
+Wake is the wake phrase, which opens the eyes, shows surprise, and nods
+tilt to 0° when face tracking is not active. The console sleep-off control
+opens the eyes and starts another 60-second window. Neither path centres
+pan.
+
+On connect, the brain sends `glance off` and leaves it off.
+`set_head_held` only updates a console flag; the comment in `doze_loop`
+that says idle life resumes is stale. Production idle head glances
+therefore do not run while the brain is connected. The firmware can still
+glance, at pan ±25° and tilt ±10°, but only when glances are enabled, the
+brain is connected, and the face is awake.
+
+Servo relaxation is separate from sleep. `ServoNeck::update` eases toward
+the current target. Once an axis is within 0.25° and stays there for
+`SERVO_RELAX_MS` (1.5 s), it calls `servo_.detach()`. While one axis is
+still moving, the other is held so it cannot sag. Detach is a signal
+change only. No firmware pin switches off the servos' 5 V supply, so
+detach does not remove power. On the ESP32-S3, ESP32Servo 3.2.1's MCPWM
+`detachPin` releases the library channel and does not drive the pin low.
+Whether the last pulse actually stops has not been measured on this head.
+The config comment that the head is light enough to hold is an assumption
+about the reference mechanism. On the calibrator, tilt held with PWM off
+at level and looking down. Pan was not tested that way, and this printed
+head is heavier.
+
+#### Proposed behaviour
+
+**Interaction → Awake → Expressive Idle → Return to Neutral → Sleep.**
+
+While awake, use the motion laboratory's Calm, Curious, or Lively
+choreography. Idle gestures must not refresh the awake clock. Face
+tracking must not either. Accepted speech, an explicit command, and
+intentional engagement do refresh it. Speaking and listening already keep
+him up through `thinking` and `ears.muted`; a speech onset should also
+count, so a long utterance is not racing a short timer. The timeout
+becomes a brain setting, default five minutes, replacing the 60-second
+doze for this lifecycle.
+
+When the timer expires:
+
+1. Stop scheduling idle gestures.
+2. Command pan and tilt to calibrated neutral (0°).
+3. Wait until that move has finished.
+4. Send the existing `asleep` message.
+5. Let the existing rest timer detach the signal only after both axes
+   have been still. Do not detach on the sleep message itself, and do not
+   detach before the return finishes.
+
+A wake phrase or other intentional interaction during the return or during
+sleep cancels the sequence, opens the eyes, and starts a new awake window.
+Explicit `look`, speech, and tracking outrank idle. One motion owner only:
+extend `ServoNeck`, including the laboratory's 16-bit timer and easing,
+rather than running a second scheduler beside it. The brain decides when
+he is idle, centred, or asleep. The firmware executes one target at a
+time.
+
+The 1.5-second relax must be suspended while an idle pose is being held.
+Otherwise a 2–6 second Curious hold would drop the signal halfway through
+and the next gesture would reattach from wherever the head had sagged.
+Relax after the sleep centre, not during the performance.
+
+If the brain disconnects mid-return, the firmware should finish the
+neutral target it already has, then relax. It should not invent a new
+idle pattern without the brain.
 
 ---
 

@@ -70,8 +70,15 @@ void Speaker::beginSpeech(size_t expectedBytes) {
 }
 
 void Speaker::feed(const uint8_t* pcm, size_t len) {
-  if (!speaking_ || ring_ == nullptr) return;
+  if (ring_ == nullptr || pcm == nullptr || len == 0) return;
+  // The copy holds the spinlock for the whole chunk (a few hundred
+  // microseconds for a 100 ms frame). Both cores keep their caches on;
+  // the other core only spins if it needs this same lock.
   portENTER_CRITICAL(&lock_);
+  if (!speaking_) {
+    portEXIT_CRITICAL(&lock_);
+    return;
+  }
   size_t used = (head_ + ringSize_ - tail_) % ringSize_;
   size_t space = ringSize_ - 1 - used;
   if (len > space) len = space;  // drop the tail rather than wrap over unread audio
@@ -82,7 +89,11 @@ void Speaker::feed(const uint8_t* pcm, size_t len) {
   portEXIT_CRITICAL(&lock_);
 }
 
-void Speaker::endSpeech() { ended_ = true; }
+void Speaker::endSpeech() {
+  portENTER_CRITICAL(&lock_);
+  ended_ = true;
+  portEXIT_CRITICAL(&lock_);
+}
 
 size_t Speaker::available() const {
   return (head_ + ringSize_ - tail_) % ringSize_;
@@ -132,7 +143,9 @@ void Speaker::task() {
         vTaskDelay(pdMS_TO_TICKS(80));
         i2s_zero_dma_buffer(I2S_PORT);
         i2s_stop(I2S_PORT);
+        portENTER_CRITICAL(&lock_);
         speaking_ = false;
+        portEXIT_CRITICAL(&lock_);
         level_ = 0;
         if (onDone_) onDone_();
       } else {

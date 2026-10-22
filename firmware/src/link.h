@@ -2,51 +2,99 @@
 
 #include <Arduino.h>
 #include <WebSocketsClient.h>
+#include <atomic>
 #include <functional>
 
 // Link: WiFi + a WebSocket to the brain server.
 //
-// Joins WiFi, connects to ws://<host>:<port>, reconnects on its own, and
-// turns the server's JSON commands (docs/protocol.md) into the same text
-// commands the serial console uses — so "emotion happy" from the brain and
-// "emo happy" typed over USB take the exact same path.
+// A dedicated FreeRTOS task owns the WebSocket client. Nothing else may call
+// into it. Commands for the face and servos are copied onto a bounded queue
+// and applied on the Arduino loop. Speaker audio is fed from this task, in
+// the same order the server sent it.
 
 class Link {
  public:
   using CommandHandler = std::function<void(const String&)>;
   using StateHandler = std::function<void(bool connected)>;
   using AudioHandler = std::function<void(const uint8_t* pcm, size_t len)>;
+  using SpeechHandler = std::function<void(bool begin, size_t bytes)>;
+  using IdleHook = void (*)();
 
   void begin(const char* ssid, const char* pass, const char* host,
              uint16_t port, const char* token, CommandHandler onCommand,
              StateHandler onState = nullptr);
 
   // Binary frames from the brain: type byte 0x01 = TTS audio (16 kHz s16le).
+  // Invoked on the link task.
   void onAudio(AudioHandler h) { onAudio_ = std::move(h); }
 
-  // Call every loop().
-  void update(uint32_t nowMs);
+  // speak_begin / speak_end, invoked on the link task before later audio
+  // frames are fed. Keeps playback start/stop in order with feed().
+  void onSpeech(SpeechHandler h) { onSpeech_ = std::move(h); }
 
-  bool connected() const { return connected_; }
+  // Called on the link task after each WebSocket turn. Used for speak_done.
+  void setIdleHook(IdleHook hook) { idleHook_ = hook; }
 
-  // Robot → server. Text is sent as-is (should be JSON).
+  // Arduino loop. Both return immediately.
+  void pollState();
+  void drainCommands();
+
+  bool connected() const {
+    return stateUp_.load(std::memory_order_acquire);
+  }
+
+  // Age of the command currently being applied, in ms. Loop only.
+  uint32_t lastCommandAgeMs() const { return lastAgeMs_; }
+  // Peak command-queue age since the previous call, then cleared. Loop only.
+  uint32_t takeCommandAgeMax();
+  int commandQueued() const;
+  // Outbound JSON drops since the previous call, then cleared. Loop only.
+  uint32_t takeOutboundDrops();
+
+  // Robot → server. From the link task this sends immediately. From any
+  // other task it copies the JSON onto a bounded queue and returns.
   void sendJson(const String& json);
   void sendState(float panDeg, const char* emotion);
   // Binary frame: one type byte (0x01 = mic audio, 0x02 = JPEG) + payload.
+  // Only the link task may call this. Other callers are ignored.
   void sendBinary(uint8_t type, const uint8_t* data, size_t len);
 
  private:
+  static void taskEntry(void* self);
+  void task();
   void onEvent(WStype_t type, uint8_t* payload, size_t length);
   void handleMessage(const char* json);
+  void publishConnected(bool up);
+  void enqueueCommand(const char* text);
+  void drainOutbound();
+  void noteCmdDrop(const char* text);
+  void noteOutDrop();
 
   WebSocketsClient ws_;
   CommandHandler onCommand_;
   StateHandler onState_;
   AudioHandler onAudio_;
+  SpeechHandler onSpeech_;
+  IdleHook idleHook_ = nullptr;
+  TaskHandle_t task_ = nullptr;
+  QueueHandle_t cmdQ_ = nullptr;
+  QueueHandle_t outQ_ = nullptr;
   const char* ssid_ = nullptr;
   const char* pass_ = nullptr;
+  const char* host_ = nullptr;
   const char* token_ = "";
-  bool connected_ = false;
+  uint16_t port_ = 0;
+  std::atomic<bool> stateUp_{false};
+  std::atomic<uint32_t> stateSeq_{0};
+  uint32_t seenSeq_ = 0;
   bool wifiReported_ = false;
-  uint32_t nextStateMs_ = 0;
+  uint32_t lastAgeMs_ = 0;
+  uint32_t cmdAgeMaxMs_ = 0;
+  uint32_t cmdDropsWindow_ = 0;
+  uint32_t cmdDropsTotal_ = 0;
+  uint32_t outDropsWindow_ = 0;
+  uint32_t lastCmdDropMs_ = 0;
+  uint32_t lastOutDropMs_ = 0;
+  uint32_t iterFeedUs_ = 0;
+  uint32_t lastNetSlowMs_ = 0;
 };

@@ -4,6 +4,7 @@
 
 #include "config.h"
 
+#if CAMERA_ENABLED
 // XIAO ESP32S3 Sense camera wiring (from the Arduino core's camera_pins.h).
 static const int PIN_PWDN = -1, PIN_RESET = -1, PIN_XCLK = 10;
 static const int PIN_SIOD = 40, PIN_SIOC = 39;
@@ -12,8 +13,14 @@ static const int PIN_Y5 = 16, PIN_Y4 = 18, PIN_Y3 = 17, PIN_Y2 = 15;
 static const int PIN_VSYNC = 38, PIN_HREF = 47, PIN_PCLK = 13;
 
 static const size_t LATEST_CAP = 64 * 1024;  // QVGA JPEGs are ~8-20 KB
+#endif
 
 bool Camera::begin() {
+#if !CAMERA_ENABLED
+  // Sensor stays unclocked: no DMA, no JPEG encode, no capture task.
+  Serial.println(F("camera: disabled (CAMERA_ENABLED=0)"));
+  return false;
+#else
   camera_config_t cfg = {};
   cfg.ledc_channel = LEDC_CHANNEL_4;  // 0-3 are taken by the servos
   cfg.ledc_timer = LEDC_TIMER_2;
@@ -56,13 +63,21 @@ bool Camera::begin() {
   ok_ = latest_ != nullptr;
   if (ok_) xTaskCreatePinnedToCore(taskEntry, "camera", 4096, this, 1, nullptr, 0);
   return ok_;
+#endif
 }
 
 void Camera::setStreaming(bool on, float fps) {
+#if !CAMERA_ENABLED
+  (void)on;
+  (void)fps;
+  streaming_ = false;
+  return;
+#else
   if (fps < 0.5f) fps = 0.5f;
   if (fps > 20.0f) fps = 20.0f;
   intervalMs_ = static_cast<uint32_t>(1000.0f / fps);
   streaming_ = on;
+#endif
 }
 
 size_t Camera::takeFrame(uint8_t* out, size_t cap) {

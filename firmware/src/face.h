@@ -39,13 +39,17 @@ class Face {
   bool asleep() const { return asleep_; }
 
   // Talking: draws a mouth that opens with `level` (0..1, the speaker's
-  // current loudness). Call every frame while audio plays.
+  // current loudness). Call on each animation step while audio plays.
   void setTalking(bool on, float level = 0.0f);
 
   // When idle behavior is on, the face blinks and glances around on its own.
   void setIdle(bool on) { idle_ = on; }
 
-  // Call every frame: advances animation, then renders.
+  // Advance blinks, gaze and the mouth. This does not touch the display.
+  void step(uint32_t nowMs);
+  // Paint the current state. sendBuffer() blocks for the I2C transfer.
+  void render();
+  // step then render.
   void update(uint32_t nowMs);
 
  private:
@@ -67,7 +71,6 @@ class Face {
 
   static Params paramsFor(Emotion e);
   void stepAnimation(uint32_t nowMs);
-  void render();
   void drawEye(int cx, int cy, bool isLeft, float hScale);
   void drawMouth(int cx, int cy);
   void drawFlourishes(int leftCx, int rightCx, int cy, int eyeTop, int eyeBottom);

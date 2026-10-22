@@ -50,6 +50,11 @@ experiments/out/**/*.mp3
 experiments/out/**/*.flac
 experiments/out/**/*.ogg
 
+# Speech-transfer traces and packet captures. Local diagnosis only.
+experiments/out/tcp-send/
+*.pcap
+*.pcapng
+
 # Mic debug recordings
 server/debug/
 

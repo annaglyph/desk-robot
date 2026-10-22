@@ -2,11 +2,22 @@
 
 #include <driver/i2s.h>
 
+#include "config.h"
+
 // PDM receive only works on I2S0 on the ESP32-S3 (the speaker uses I2S1).
 static const i2s_port_t I2S_PORT = I2S_NUM_0;
+#if MIC_ENABLED
 static const int SAMPLE_RATE = 16000;
+#endif
 
 void Mic::begin(uint8_t clkPin, uint8_t dataPin, float gain) {
+#if !MIC_ENABLED
+  (void)clkPin;
+  (void)dataPin;
+  (void)gain;
+  Serial.println(F("mic: disabled (MIC_ENABLED=0)"));
+  return;
+#else
   gain_ = gain;
   queue_ = xQueueCreate(16, FRAME_BYTES);  // ~0.5 s of frames
 
@@ -31,6 +42,12 @@ void Mic::begin(uint8_t clkPin, uint8_t dataPin, float gain) {
   i2s_set_pin(I2S_PORT, &pins);
 
   xTaskCreatePinnedToCore(taskEntry, "mic", 4096, this, 2, nullptr, 0);
+#endif
+}
+
+int Mic::queued() const {
+  if (queue_ == nullptr) return 0;
+  return static_cast<int>(uxQueueMessagesWaiting(queue_));
 }
 
 bool Mic::nextFrame(uint8_t* out) {
