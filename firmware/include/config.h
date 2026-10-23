@@ -90,9 +90,13 @@ constexpr bool CAMERA_HMIRROR = false;
 constexpr float SPEAKER_VOLUME = 0.7f;
 
 // ─── Behavior ────────────────────────────────────────────────────────────────
-// Face animation and servo steps share this cadence. The per-step easing in
-// ServoNeck::update assumes it is called about this often.
+// Face steps. Blinks, eye morphs and Z's advance by a fixed amount each call,
+// so this stays at 33 ms when the servo tick changes.
 constexpr uint32_t FRAME_INTERVAL_MS = 33; // ~30 Hz
+// Servo command rate. 20 ms is one 50 Hz pulse period, and it is the motion
+// laboratory's tick. Idle curves are timed in milliseconds. The manual-move
+// fraction in ServoNeck scales with this value, so 33 restores the old ease.
+constexpr uint32_t SERVO_INTERVAL_MS = 20;
 // The OLED transfer blocks for ~30 ms, so it runs on its own slower timer.
 // 50 ms is 20 fps, inside the 15–20 fps diagnostic limit.
 constexpr uint32_t OLED_INTERVAL_MS = 50;

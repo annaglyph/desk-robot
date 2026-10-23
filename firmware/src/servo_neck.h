@@ -8,12 +8,17 @@
 // Angles are in "head degrees": 0 = centered. For pan, negative = robot's
 // left; for tilt, negative = down. The class maps that onto the servo's
 // 0-180 range, with an optional trim offset and direction flip.
+//
+// setTarget eases a fraction of the remaining error each update. moveTo plays
+// a timed curve from the current angle. An explicit setTarget or setRaw, or
+// cancelTrajectory, drops that curve on the next update.
 
 class ServoNeck {
  public:
+  enum class Ease : uint8_t { Cosine, Smooth };
+
   void begin(uint8_t pin, float minDeg, float maxDeg, float maxSpeedDegPerSec,
-             uint32_t relaxAfterMs, float trimDeg = 0.0f,
-             float glanceRangeDeg = 25.0f, bool invert = false);
+             uint32_t relaxAfterMs, float trimDeg = 0.0f, bool invert = false);
 
   void setTarget(float deg);
   // Calibration only: drive straight to a head angle, ignoring the limits.
@@ -23,13 +28,21 @@ class ServoNeck {
   // under the head's weight when the other axis swings; call this while the
   // other axis is moving.
   void hold();
-  bool moving() const { return fabsf(targetDeg_ - currentDeg_) > 0.25f; }
+  // Timed move from the live angle. delayMs waits before starting, so tilt
+  // can follow pan. Duration is the whole move, not a speed.
+  void moveTo(float deg, uint32_t durationMs, Ease ease, uint32_t delayMs,
+              uint32_t nowMs);
+  // Drop a timed move and keep the angle already reached.
+  void cancelTrajectory();
+
+  bool moving() const {
+    return timed_ || pending_ || fabsf(targetDeg_ - currentDeg_) > 0.25f;
+  }
+  bool trajectory() const { return timed_ || pending_; }
   float current() const { return currentDeg_; }
   float target() const { return targetDeg_; }
-
-  // When idle glances are on, the head occasionally turns a little on its
-  // own — paired with the face saccades it makes the robot feel alive.
-  void setIdleGlances(bool on) { idleGlances_ = on; }
+  float minDeg() const { return minDeg_; }
+  float maxDeg() const { return maxDeg_; }
 
   // Call every frame.
   void update(uint32_t nowMs);
@@ -39,6 +52,7 @@ class ServoNeck {
   void attachIfNeeded();
   void rewriteAttached();
   void reportTimerWidthOnce();
+  void clearTrajectory();
 
   Servo servo_;
   uint8_t pin_ = 0;
@@ -46,7 +60,6 @@ class ServoNeck {
   float maxSpeed_ = 180; // deg/sec
   uint32_t relaxAfterMs_ = 1500;
   float trimDeg_ = 0;
-  float glanceRange_ = 25;
   bool invert_ = false;
 
   float currentDeg_ = 0;
@@ -54,6 +67,13 @@ class ServoNeck {
   bool attached_ = false;
   uint32_t settledSinceMs_ = 0;
   uint32_t lastUpdateMs_ = 0;
-  uint32_t nextGlanceMs_ = 0;
-  bool idleGlances_ = true;
+
+  bool timed_ = false;
+  bool pending_ = false;
+  uint32_t timedStartMs_ = 0;
+  uint32_t timedDurMs_ = 0;
+  uint32_t pendingAt_ = 0;
+  float timedFrom_ = 0;
+  float timedTo_ = 0;
+  Ease timedEase_ = Ease::Cosine;
 };

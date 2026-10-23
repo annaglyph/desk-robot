@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "config.h"
 #include "face.h"
+#include "idle_motion.h"
 #include "link.h"
 #include "mic.h"
 #include "servo_neck.h"
@@ -29,6 +30,7 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R2, U8X8_PIN_NONE);
 Face face(u8g2);
 ServoNeck panNeck;
 ServoNeck tiltNeck;
+IdleMotion idleMotion;
 Link brainLink;
 Speaker speaker;
 Mic mic;
@@ -42,14 +44,12 @@ uint32_t lastOledMs = 0;
 uint32_t nextStateMs = 0;
 bool demoMode = true;  // cycles emotions on its own; off while the brain is connected
 bool brainConnected = false;
-bool glanceWanted = true;  // the brain's `glance on|off` (off while it holds a pose or tracks a face)
 
-// Idle glances only while Rocky is awake and his brain is connected. Asleep,
-// or with no server running, the head stays still.
-void applyGlances() {
-  bool on = brainConnected && !face.asleep() && glanceWanted;
-  panNeck.setIdleGlances(on);
-  tiltNeck.setIdleGlances(on);
+// Idle motion stays off until `idle on` or `glance on`. It also waits until
+// the brain is connected and Rocky is awake. Closing that gate stops a
+// gesture where it is; it does not return the head to center.
+void applyIdleGate() {
+  idleMotion.setGate(brainConnected && !face.asleep());
 }
 uint32_t nextDemoEmotionMs = 0;
 uint8_t demoEmotionIdx = 0;
@@ -92,7 +92,11 @@ void printHelp() {
   Serial.println(F("  blink        blink now"));
   Serial.println(F("  sleep on|off eyes shut, breathing, Z's"));
   Serial.println(F("  demo on|off  idle life: auto blinks and emotion changes"));
-  Serial.println(F("  glance on|off  allow idle head glances (only happen while the brain is connected and he is awake)"));
+  Serial.println(F("  glance on|off  same switch as idle on|off"));
+  Serial.println(F("  idle on|off  curious head motion while awake and connected"));
+  Serial.println(F("  idle calm|curious|lively   preset only; idle on to run it"));
+  Serial.println(F("  idle status"));
+  Serial.println(F("  Leave face tracking off while idle is on. A still face sends no pan/tilt."));
   Serial.println(F("  volume <0-1> speaker volume"));
   Serial.println(F("  beep         play a test tone through the speaker"));
   Serial.println(F("  mic on|off   stream the microphone to the brain"));
@@ -128,12 +132,14 @@ void handleCommand(String line, uint32_t ageMs = 0) {
     }
   } else if (cmd == "pan") {
     panNeck.setTarget(arg.toFloat());
+    idleMotion.noteActivity(millis());
     Serial.printf("pan -> %.0f deg\n", panNeck.target());
 #if LOOP_TIMING
     noteCommand("pan", ageMs);
 #endif
   } else if (cmd == "tilt") {
     tiltNeck.setTarget(arg.toFloat());
+    idleMotion.noteActivity(millis());
     Serial.printf("tilt -> %.0f deg\n", tiltNeck.target());
 #if LOOP_TIMING
     noteCommand("tilt", ageMs);
@@ -146,10 +152,12 @@ void handleCommand(String line, uint32_t ageMs = 0) {
     if (axis == "tilt") tiltNeck.setRaw(deg);
     else if (axis == "pan") panNeck.setRaw(deg);
     else { Serial.println(F("usage: raw pan|tilt <deg>")); return; }
+    idleMotion.noteActivity(millis());
     Serial.printf("raw %s -> %.0f deg (limits ignored)\n", axis.c_str(), deg);
   } else if (cmd == "center") {
     panNeck.setTarget(0);
     tiltNeck.setTarget(0);
+    idleMotion.noteActivity(millis());
     Serial.println(F("head -> center"));
 #if LOOP_TIMING
     noteCommand("center", ageMs);
@@ -158,7 +166,7 @@ void handleCommand(String line, uint32_t ageMs = 0) {
     face.blink();
   } else if (cmd == "sleep") {
     face.setAsleep(arg == "on");
-    applyGlances();
+    applyIdleGate();
     Serial.printf("sleep %s\n", face.asleep() ? "on" : "off");
 #if LOOP_TIMING
     noteCommand(face.asleep() ? "sleep" : "wake", ageMs);
@@ -232,9 +240,37 @@ void handleCommand(String line, uint32_t ageMs = 0) {
   } else if (cmd == "temp") {
     Serial.printf("chip %.1f C\n", temperatureRead());
   } else if (cmd == "glance") {
-    glanceWanted = (arg == "on");
-    applyGlances();
-    Serial.printf("glance %s\n", glanceWanted ? "on" : "off");
+    idleMotion.setEnabled(arg == "on");
+    applyIdleGate();
+    Serial.printf("glance %s\n", idleMotion.enabled() ? "on" : "off");
+  } else if (cmd == "idle") {
+    String which = arg;
+    which.toLowerCase();
+    if (which == "on") {
+      idleMotion.setEnabled(true);
+      applyIdleGate();
+      Serial.printf("idle on (%s)\n", idleMotion.preset());
+      if (!brainConnected) {
+        Serial.println(F("waiting for the brain — connect first, or its glance off clears this"));
+      } else if (face.asleep()) {
+        Serial.println(F("waiting until awake"));
+      }
+    } else if (which == "off") {
+      idleMotion.setEnabled(false);
+      applyIdleGate();
+      Serial.println(F("idle off"));
+    } else if (which == "calm" || which == "curious" || which == "lively") {
+      idleMotion.setPreset(which.c_str());
+      Serial.printf("idle preset %s — scale %.2f, duration %.2f, hold %lu-%lu ms\n",
+                    idleMotion.preset(), idleMotion.amplitude(), idleMotion.durationScale(),
+                    static_cast<unsigned long>(idleMotion.pauseMin()),
+                    static_cast<unsigned long>(idleMotion.pauseMax()));
+      if (!idleMotion.enabled()) Serial.println(F("idle is off"));
+    } else if (which == "status") {
+      idleMotion.printStatus(brainConnected, face.asleep(), speaker.speaking());
+    } else {
+      Serial.println(F("idle on|off|calm|curious|lively|status"));
+    }
   } else if (cmd == "demo") {
     demoMode = (arg == "on");
     face.setIdle(demoMode);
@@ -256,10 +292,10 @@ void setup() {
 
   face.begin();
   panNeck.begin(PIN_SERVO_PAN, PAN_MIN_DEG, PAN_MAX_DEG, PAN_MAX_SPEED,
-                SERVO_RELAX_MS, PAN_TRIM_DEG, /*glanceRange=*/25.0f, PAN_INVERT);
+                SERVO_RELAX_MS, PAN_TRIM_DEG, PAN_INVERT);
   tiltNeck.begin(PIN_SERVO_TILT, TILT_MIN_DEG, TILT_MAX_DEG, TILT_MAX_SPEED,
-                 SERVO_RELAX_MS, TILT_TRIM_DEG, /*glanceRange=*/10.0f,
-                 TILT_INVERT);
+                 SERVO_RELAX_MS, TILT_TRIM_DEG, TILT_INVERT);
+  idleMotion.begin(&panNeck, &tiltNeck);
 
   speaker.begin(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN, SPEAKER_VOLUME,
                 []() { speakDonePending = true; });
@@ -268,7 +304,7 @@ void setup() {
 
   demoMode = true;
   face.setIdle(true);
-  applyGlances();  // off: no brain yet
+  applyIdleGate();  // off: idle is disabled, and no brain yet
   nextDemoEmotionMs = millis() + 8000;
 
   Serial.println(F("\ndesk-robot v0.3.0 — hello!"));
@@ -321,13 +357,14 @@ void setup() {
              [](bool connected) {
                // The brain picks emotions while it's connected; the demo
                // cycle takes over again if it goes away. Blinks stay on
-               // either way; idle glances only while connected and awake.
+               // either way. Idle stays off unless it was turned on, and a
+               // disconnect stops a gesture where it is.
                brainConnected = connected;
                demoMode = !connected;
                if (connected) {
                  face.setEmotion(Emotion::Happy);
                }
-               applyGlances();
+               applyIdleGate();
              });
 #else
   Serial.println(F("no include/secrets.h — USB-only mode (see secrets.h.example)"));
@@ -384,7 +421,7 @@ void loop() {
   // Servos run before the OLED transfer, on their own timer. The link task
   // owns the WebSocket read, so this no longer waits on a payload.
   uint32_t tick = millis();
-  if (tick - lastServoMs >= FRAME_INTERVAL_MS) {
+  if (tick - lastServoMs >= SERVO_INTERVAL_MS) {
     lastServoMs = tick;
 #if LOOP_TIMING
     uint32_t tServo = micros();
@@ -394,6 +431,8 @@ void loop() {
     if (tiltNeck.moving()) panNeck.hold();
     panNeck.update(tick);
     tiltNeck.update(tick);
+    // After the step, so a new gesture starts on the next tick.
+    idleMotion.service(tick, speaker.speaking());
 #if LOOP_TIMING
     servoUs = sinceUs(tServo);
     timeServo.add(servoUs);
