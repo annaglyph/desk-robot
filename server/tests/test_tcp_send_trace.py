@@ -16,6 +16,7 @@ from brain.tcp_probe import (
     SpeechSendTrace,
     parse_darwin_tcp_connection_info,
     read_send_path,
+    tcp_trace_enabled,
 )
 
 
@@ -112,6 +113,15 @@ class DarwinTcpInfoTests(unittest.TestCase):
         self.assertGreaterEqual(state["snd_sbbytes"], 0)
 
 
+class TcpTraceSwitchTests(unittest.TestCase):
+    def test_off_unless_explicitly_enabled(self):
+        with patch.dict(os.environ, {"DESK_ROBOT_TCP_TRACE": ""}, clear=False):
+            self.assertFalse(tcp_trace_enabled())
+        for value in ("1", "true", "yes", "on"):
+            with patch.dict(os.environ, {"DESK_ROBOT_TCP_TRACE": value}):
+                self.assertTrue(tcp_trace_enabled())
+
+
 class SpeechSendTraceTests(unittest.TestCase):
     def test_records_are_buffered_until_finish(self):
         directory = Path(self._dir())
@@ -190,8 +200,10 @@ class PlayRobotTraceTests(unittest.IsolatedAsyncioTestCase):
 
         reply._next = no_more
         try:
-            with patch.dict(os.environ, {"DESK_ROBOT_TCP_TRACE_DIR": str(directory)}), \
-                    patch.object(main, "send_to_robot", send_to_robot):
+            with patch.dict(os.environ, {
+                "DESK_ROBOT_TCP_TRACE": "1",
+                "DESK_ROBOT_TCP_TRACE_DIR": str(directory),
+            }), patch.object(main, "send_to_robot", send_to_robot):
                 await reply._play_robot(b"\x00\x01" * 8)
         finally:
             main.robot_socket = previous
@@ -207,6 +219,48 @@ class PlayRobotTraceTests(unittest.IsolatedAsyncioTestCase):
         sample = next(rec for rec in records if rec["kind"] == "sample")
         self.assertEqual(sample["tcp_error"], "no_socket")
         self.assertIsNone(sample["snd_wnd"])
+
+    async def test_playback_sends_without_a_trace_when_disabled(self):
+        directory = Path(self._dir())
+        sent = []
+
+        class FakeSocket:
+            def __init__(self):
+                self.transport = self
+
+            async def send(self, frame):
+                sent.append(frame)
+
+            def get_write_buffer_size(self):
+                raise AssertionError("buffer size is only read while tracing")
+
+            def get_extra_info(self, name):
+                raise AssertionError("tcp state is only read while tracing")
+
+        async def send_to_robot(payload):
+            if payload.get("type") == "speak_end":
+                main.robot_speak_done.set()
+            return True
+
+        previous = main.robot_socket
+        main.robot_socket = FakeSocket()
+        reply = main.SpokenReply(asyncio.get_running_loop(), main.Timeline(time.time()))
+
+        async def no_more():
+            return None
+
+        reply._next = no_more
+        try:
+            with patch.dict(os.environ, {
+                "DESK_ROBOT_TCP_TRACE": "",
+                "DESK_ROBOT_TCP_TRACE_DIR": str(directory),
+            }), patch.object(main, "send_to_robot", send_to_robot):
+                await reply._play_robot(b"\x00\x01" * 8)
+        finally:
+            main.robot_socket = previous
+            main.robot_speak_done.clear()
+        self.assertEqual(sent, [b"\x01" + b"\x00\x01" * 8])
+        self.assertEqual(list(directory.glob("speech-*.jsonl")), [])
 
     def _dir(self) -> str:
         import tempfile

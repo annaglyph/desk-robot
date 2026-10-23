@@ -3,8 +3,10 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <cstring>
+#include <lwip/sockets.h>
 
 #include "config.h"
+#include "mic.h"
 #include "ws_probe.h"
 
 static const char* FW_VERSION = "0.3.0";
@@ -72,9 +74,45 @@ void Link::begin(const char* ssid, const char* pass, const char* host,
 
 void Link::taskEntry(void* self) { static_cast<Link*>(self)->task(); }
 
+#if LOOP_TIMING
+#include <esp_wifi.h>
+
+// WiFi.setSleep(false) asks the Arduino core for WIFI_PS_NONE. The core calls
+// esp_wifi_set_ps and does not expose that esp_err_t. Its bool is true only
+// when the saved mode changed and esp_wifi_set_ps returned ESP_OK. False means
+// the mode was already saved, or the IDF call failed. The query below is the
+// mode actually in effect. Both lines are diagnostic and stay off unless
+// LOOP_TIMING is set.
+static const char* wifiPowerSaveName(wifi_ps_type_t mode) {
+  switch (mode) {
+    case WIFI_PS_NONE: return "WIFI_PS_NONE";
+    case WIFI_PS_MIN_MODEM: return "WIFI_PS_MIN_MODEM";
+    case WIFI_PS_MAX_MODEM: return "WIFI_PS_MAX_MODEM";
+    default: return "unknown";
+  }
+}
+
+static void logWifiPowerSave() {
+  wifi_ps_type_t mode = WIFI_PS_NONE;
+  esp_err_t err = esp_wifi_get_ps(&mode);
+  if (err == ESP_OK) {
+    Serial.printf("wifi: power save %s (%d)\n", wifiPowerSaveName(mode),
+                  static_cast<int>(mode));
+  } else {
+    Serial.printf("wifi: power save query failed, esp_err %d (%s)\n",
+                  static_cast<int>(err), esp_err_to_name(err));
+  }
+}
+#endif
+
 void Link::task() {
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);  // lower latency; we're on wall power anyway
+#if LOOP_TIMING
+  bool sleepOff = WiFi.setSleep(false);  // WIFI_PS_NONE; lower latency; wall power
+  Serial.printf("wifi: setSleep(false) returned %s\n", sleepOff ? "true" : "false");
+#else
+  WiFi.setSleep(false);  // WIFI_PS_NONE; lower latency; wall power
+#endif
   WiFi.begin(ssid_, pass_);
   Serial.printf("wifi: joining \"%s\"...\n", ssid_);
   Serial.println(F("link: running on core 0, priority 2"));
@@ -95,6 +133,9 @@ void Link::task() {
     bool wifiUp = WiFi.status() == WL_CONNECTED;
     if (wifiUp && !wifiReported_) {
       Serial.printf("wifi: connected, ip %s\n", WiFi.localIP().toString().c_str());
+#if LOOP_TIMING
+      logWifiPowerSave();
+#endif
       wifiReported_ = true;
     } else if (!wifiUp && wifiReported_) {
       Serial.println(F("wifi: lost, retrying"));
@@ -123,6 +164,9 @@ void Link::task() {
       }
 #endif
       drainOutbound();
+      // Receive before transmit: an incoming speaker frame or control command
+      // is never held behind microphone upload from an earlier pass.
+      drainMic();
     } else if (outQ_ != nullptr) {
       // Don't keep JSON the loop queued while the socket isn't serviced.
       // A later reconnect would otherwise send stale state and temperature.
@@ -137,11 +181,19 @@ void Link::task() {
       nextNetMs = millis() + 2000;
       uint32_t hwm = uxTaskGetStackHighWaterMark(nullptr);
       Serial.printf(
-          "net ms avg/max: ws %u/%u wait %u/%u tcp %u/%u cb %u/%u feed %u/%u drop %u hwm %u\n",
+          "net ms avg/max: ws %u/%u wait %u/%u tcp %u/%u cb %u/%u feed %u/%u "
+          "drop %u mic sent %u fail %u busy %u txmax %ums q %d mdrop %u/%u hwm %u\n",
           timeWs.avgMs(), timeWs.maxMs(), timeWait.avgMs(), timeWait.maxMs(),
           timeTcp.avgMs(), timeTcp.maxMs(), timeCb.avgMs(), timeCb.maxMs(),
-          timeFeed.avgMs(), timeFeed.maxMs(), cmdDropsWindow_, hwm);
+          timeFeed.avgMs(), timeFeed.maxMs(), cmdDropsWindow_, micSentWindow_,
+          micFailuresWindow_, micBusyWindow_, micMaxSendUs_ / 1000, mic_ ? mic_->queued() : 0,
+          mic_ ? mic_->takeDroppedWindow() : 0,
+          mic_ ? mic_->droppedTotal() : 0, hwm);
       cmdDropsWindow_ = 0;
+      micSentWindow_ = 0;
+      micFailuresWindow_ = 0;
+      micBusyWindow_ = 0;
+      micMaxSendUs_ = 0;
       timeWs.reset();
       timeWait.reset();
       timeTcp.reset();
@@ -239,6 +291,50 @@ void Link::drainOutbound() {
   }
 }
 
+void Link::drainMic() {
+  if (!connected() || mic_ == nullptr || !mic_->streaming()) return;
+
+  // 30 ms frames. Capping a pass at four lets the 16-frame queue catch up
+  // after a short stall without turning one link turn into an unbounded send.
+  static constexpr int MAX_FRAMES_PER_PASS = 4;
+  static uint8_t frame[Mic::FRAME_BYTES];
+  for (int i = 0; i < MAX_FRAMES_PER_PASS && mic_->queued() > 0; ++i) {
+    // Checked before popping, so an unwritable socket leaves the frame queued.
+    if (!socketWritable()) {
+      micBusyWindow_++;
+      break;
+    }
+    if (!mic_->nextFrame(frame)) break;
+    uint32_t started = micros();
+    bool sent = sendBinary(0x01, frame, sizeof(frame));
+    uint32_t elapsed = static_cast<uint32_t>(micros() - started);
+    if (elapsed > micMaxSendUs_) micMaxSendUs_ = elapsed;
+    if (sent) {
+      micSentWindow_++;
+    } else {
+      micFailuresWindow_++;
+    }
+  }
+}
+
+// lwIP marks a TCP socket writable only while more than TCP_SNDLOWAT (2,880
+// bytes here) of send buffer is free and the segment queue is below its low
+// mark, so a ~969-byte mic frame normally fits in one send(MSG_DONTWAIT). This
+// task is the socket's only writer, so free space cannot shrink between this
+// check and the send. sendBIN() can still wait inside WiFiClient::write() if
+// lwIP returns EAGAIN anyway (for example no pbuf memory): that path retries
+// select() with a 1 s timeout, up to 10 times. This lowers the chance of a
+// blocking mic send; it does not make sendBIN() non-blocking.
+bool Link::socketWritable() {
+  int fd = ws_.socketFd();
+  if (fd < 0) return false;
+  fd_set set;
+  FD_ZERO(&set);
+  FD_SET(fd, &set);
+  struct timeval tv = {0, 0};
+  return select(fd + 1, nullptr, &set, nullptr, &tv) > 0 && FD_ISSET(fd, &set);
+}
+
 void Link::sendJson(const String& json) {
   if (!connected()) return;
   if (task_ != nullptr && xTaskGetCurrentTaskHandle() == task_) {
@@ -256,25 +352,25 @@ void Link::sendJson(const String& json) {
   if (outQ_ == nullptr || xQueueSend(outQ_, &item, 0) != pdTRUE) noteOutDrop();
 }
 
-void Link::sendBinary(uint8_t type, const uint8_t* data, size_t len) {
-  // The client is not safe from the Arduino loop. Mic and camera uplink are
-  // off in this build; checkpoint 3 queues them instead of calling here.
+bool Link::sendBinary(uint8_t type, const uint8_t* data, size_t len) {
+  // The client is not safe from the Arduino loop. The link task is the only
+  // owner; microphone upload reaches here through drainMic().
   if (task_ == nullptr || xTaskGetCurrentTaskHandle() != task_) {
     static bool warned = false;
     if (!warned) {
       warned = true;
       Serial.println(F("link: sendBinary ignored off the link task"));
     }
-    return;
+    return false;
   }
-  if (!connected()) return;
+  if (!connected()) return false;
   static uint8_t* buf = nullptr;
   static const size_t CAP = 64 * 1024;  // mic frames are ~1 KB, JPEGs ~10-20 KB
   if (buf == nullptr) buf = static_cast<uint8_t*>(ps_malloc(CAP));
-  if (buf == nullptr || len > CAP - 1) return;
+  if (buf == nullptr || len > CAP - 1) return false;
   buf[0] = type;
   memcpy(buf + 1, data, len);
-  ws_.sendBIN(buf, len + 1);
+  return ws_.sendBIN(buf, len + 1);
 }
 
 void Link::sendState(float panDeg, const char* emotion) {
@@ -295,7 +391,16 @@ void Link::onEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED: {
       publishConnected(true);
+      int noDelayBefore = -1;
+      int noDelayAfter = -1;
+      bool noDelaySet = ws_.enableTcpNoDelay(noDelayBefore, noDelayAfter);
       Serial.println(F("brain: connected"));
+      if (noDelaySet) {
+        Serial.printf("brain: TCP_NODELAY %s (raw %d -> %d)\n",
+                      noDelayAfter ? "on" : "off", noDelayBefore, noDelayAfter);
+      } else {
+        Serial.println(F("brain: TCP_NODELAY could not be set"));
+      }
       JsonDocument doc;
       doc["type"] = "hello";
       doc["who"] = "desk-robot";

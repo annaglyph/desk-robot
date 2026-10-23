@@ -1,7 +1,8 @@
 # Rocky audio transport — 22 October 2026
 
-Working notes from the speaker-dropout investigation. The cause is not
-identified. Firmware behaviour, frame size, the 200 ms prebuffer, and I²S
+The network path was identified the next day. See
+[network-2026-10-23.md](network-2026-10-23.md). These notes stay as the
+record of the transport changes. The cause is not identified in this file. Firmware behaviour, frame size, the 200 ms prebuffer, and I²S
 were left as they were at the end of the day. The brain changes are the
 `TCP_NODELAY` setting and the speech trace.
 

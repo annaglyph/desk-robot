@@ -44,7 +44,7 @@ import time
 import websockets
 
 from . import config, home_assistant, home_control, mouth, personality
-from .tcp_probe import SpeechSendTrace, read_send_path
+from .tcp_probe import SpeechSendTrace, read_send_path, tcp_trace_enabled
 from .thinking import Interrupted, RobotBrain, build_tools
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
@@ -645,10 +645,15 @@ class SpokenReply:
         self.sentences.put(None)  # wake the voice thread so it can exit
         self.audio.put(None)
 
-    async def _send_pcm_frame(self, frame: bytes, stats: dict, trace: SpeechSendTrace) -> None:
-        """Send one existing PCM frame and time that send. The bytes and the
-        socket call are the same as before. Timestamps are buffered; the
-        trace file is written after the utterance."""
+    async def _send_pcm_frame(
+        self, frame: bytes, stats: dict | None, trace: SpeechSendTrace | None,
+    ) -> None:
+        """Send one existing PCM frame. Timestamps and the trace file are
+        recorded only while DESK_ROBOT_TCP_TRACE is on. The bytes and the
+        socket call are the same either way."""
+        if trace is None or stats is None:
+            await robot_socket.send(frame)
+            return
         ready_mono = time.monotonic()
         ready_wall = time.time()
         ready = time.perf_counter()
@@ -688,15 +693,20 @@ class SpokenReply:
         self.tl.mark("speaking")
         buf = bytearray()
         total = 0
+        tracing = tcp_trace_enabled()
         stats = {
             "n": 0, "send_sum": 0.0, "send_max": 0.0,
             "gap_n": 0, "gap_sum": 0.0, "gap_max": 0.0,
             "buf_max": 0, "sent_at": None, "slow": 0,
-        }
-        trace = SpeechSendTrace(_robot_write_buffer_size, _robot_tcp_state)
+        } if tracing else None
+        trace = (
+            SpeechSendTrace(_robot_write_buffer_size, _robot_tcp_state)
+            if tracing else None
+        )
         chunk: bytes | None = first
         try:
-            trace.start()
+            if trace is not None:
+                trace.start()
             while chunk is not None:
                 buf += chunk
                 while len(buf) >= FRAME_BYTES:
@@ -715,12 +725,13 @@ class SpokenReply:
             except asyncio.TimeoutError:
                 print("(robot never said it finished speaking)")
         finally:
-            try:
-                written = await self.loop.run_in_executor(None, trace.finish)
-            except Exception as exc:
-                written = None
-                print(f"(pcm trace not written: {exc})")
-            if stats["n"]:
+            written = None
+            if trace is not None:
+                try:
+                    written = await self.loop.run_in_executor(None, trace.finish)
+                except Exception as exc:
+                    print(f"(pcm trace not written: {exc})")
+            if stats is not None and stats["n"]:
                 gap_avg = stats["gap_sum"] / stats["gap_n"] if stats["gap_n"] else 0.0
                 print(
                     "pcm send: "

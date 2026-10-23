@@ -1,8 +1,10 @@
-"""Temporary speech-transfer trace for the robot WebSocket.
+"""Optional speech-transfer trace for the robot WebSocket.
 
-Samples the asyncio write buffer and the macOS TCP send path while a reply
-is being sent, then writes one JSONL file after the utterance. It does not
-change socket options, frame size, or write-buffer limits.
+Off unless ``DESK_ROBOT_TCP_TRACE=1``. When on, it samples the asyncio write
+buffer and the macOS TCP send path while a reply is being sent, then writes
+one JSONL file after the utterance. It does not change socket options, frame
+size, or write-buffer limits. ``DESK_ROBOT_TCP_TRACE_DIR`` overrides the
+output directory.
 
 The TCP fields come from Darwin's ``struct tcp_connection_info``
 (``netinet/tcp.h``, ``TCP_CONNECTION_INFO`` / 0x106). Offsets and units were
@@ -80,6 +82,13 @@ def read_send_path(sock) -> dict:
     state.update(parse_darwin_tcp_connection_info(bytes(raw)))
     state["tcp_bytes"] = len(raw)
     return state
+
+
+def tcp_trace_enabled() -> bool:
+    """True only when DESK_ROBOT_TCP_TRACE is set to 1, true, yes, or on."""
+    return os.environ.get("DESK_ROBOT_TCP_TRACE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def default_trace_dir() -> Path:

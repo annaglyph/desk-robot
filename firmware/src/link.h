@@ -4,6 +4,28 @@
 #include <WebSocketsClient.h>
 #include <atomic>
 #include <functional>
+#include <lwip/sockets.h>
+
+class Mic;
+
+// The library keeps its WiFiClient protected. This exposes only the socket
+// descriptor so the link task can test writability before a mic frame.
+// The library itself is unchanged.
+class LinkWsClient : public WebSocketsClient {
+ public:
+  int socketFd() const { return _client.tcp != nullptr ? _client.tcp->fd() : -1; }
+
+  // WiFiClient exposes these calls publicly. Read before and after so the log
+  // confirms the actual option value on each newly connected socket.
+  bool enableTcpNoDelay(int& before, int& after) {
+    before = -1;
+    after = -1;
+    if (_client.tcp == nullptr) return false;
+    if (_client.tcp->getOption(TCP_NODELAY, &before) < 0) return false;
+    if (_client.tcp->setNoDelay(true) < 0) return false;
+    return _client.tcp->getOption(TCP_NODELAY, &after) == 0;
+  }
+};
 
 // Link: WiFi + a WebSocket to the brain server.
 //
@@ -32,6 +54,11 @@ class Link {
   // frames are fed. Keeps playback start/stop in order with feed().
   void onSpeech(SpeechHandler h) { onSpeech_ = std::move(h); }
 
+  // The link task reads directly from this existing 16-frame PDM queue after
+  // it handles incoming WebSocket traffic. The Arduino loop never sends mic
+  // frames over the socket.
+  void onMic(Mic* mic) { mic_ = mic; }
+
   // Called on the link task after each WebSocket turn. Used for speak_done.
   void setIdleHook(IdleHook hook) { idleHook_ = hook; }
 
@@ -56,8 +83,9 @@ class Link {
   void sendJson(const String& json);
   void sendState(float panDeg, const char* emotion);
   // Binary frame: one type byte (0x01 = mic audio, 0x02 = JPEG) + payload.
-  // Only the link task may call this. Other callers are ignored.
-  void sendBinary(uint8_t type, const uint8_t* data, size_t len);
+  // Only the link task may call this. Other callers are ignored and return
+  // false. The result is the WebSocket library's binary-send result.
+  bool sendBinary(uint8_t type, const uint8_t* data, size_t len);
 
  private:
   static void taskEntry(void* self);
@@ -67,15 +95,18 @@ class Link {
   void publishConnected(bool up);
   void enqueueCommand(const char* text);
   void drainOutbound();
+  void drainMic();
+  bool socketWritable();
   void noteCmdDrop(const char* text);
   void noteOutDrop();
 
-  WebSocketsClient ws_;
+  LinkWsClient ws_;
   CommandHandler onCommand_;
   StateHandler onState_;
   AudioHandler onAudio_;
   SpeechHandler onSpeech_;
   IdleHook idleHook_ = nullptr;
+  Mic* mic_ = nullptr;
   TaskHandle_t task_ = nullptr;
   QueueHandle_t cmdQ_ = nullptr;
   QueueHandle_t outQ_ = nullptr;
@@ -97,4 +128,8 @@ class Link {
   uint32_t lastOutDropMs_ = 0;
   uint32_t iterFeedUs_ = 0;
   uint32_t lastNetSlowMs_ = 0;
+  uint32_t micSentWindow_ = 0;
+  uint32_t micFailuresWindow_ = 0;
+  uint32_t micBusyWindow_ = 0;
+  uint32_t micMaxSendUs_ = 0;
 };

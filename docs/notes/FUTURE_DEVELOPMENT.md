@@ -10,41 +10,34 @@ itself, a reason to change anything.
 
 ---
 
-## Checkpoint — 22 October 2026
+## Checkpoint — 23 October 2026
 
-The investigation is in [audio-transport-2026-10-22.md](audio-transport-2026-10-22.md).
-The cause of the remaining speaker glitches is not identified. Do not change
-frame size, the prebuffer, or I²S to hide them.
+Microphone streaming works when Rocky joins the Mac's shared Wi-Fi instead of
+the house extender. The result and the home setup are in
+[network-2026-10-23.md](network-2026-10-23.md). The 22 October transport notes
+remain in [audio-transport-2026-10-22.md](audio-transport-2026-10-22.md).
 
-### Open
+The link task, the microphone queue, the writability check before each uplink
+frame, and `TCP_NODELAY` stay. They are part of the working audio path. Do not
+change frame size, the prebuffer, or I²S to chase the old glitches: those were
+observed on the extender path.
 
-- Speaker audio is improved and sometimes clean, and still intermittently glitchy.
-- The microphone and the camera are compiled out. Turning either flag on before
-  uplink is queued does not restore them: `sendBinary` from the Arduino loop is
-  ignored. See the first step below.
-- The motion laboratory's smooth 16-bit PWM has been tested on the spare board.
-  Production easing and pulse generation are unchanged.
+`LOOP_TIMING=0` and `CAMERA_ENABLED=0`. `MIC_ENABLED=1`. The brain speech
+trace runs only when `DESK_ROBOT_TCP_TRACE=1`.
+
+### Still open, not next
+
+- The camera is still compiled out.
+- Production servos still use the ESP32Servo pulse path. The motion
+  laboratory's 16-bit PWM stays on the spare board.
 - The tilt signal is still GPIO43, which is also UART0 TX. The boot-time
   backward kick is recorded and the move to GPIO44 is deferred.
-- `LOOP_TIMING`, the WebSocket read probe, `TCP_NODELAY`, and the brain's
-  PCM/TCP trace are diagnostic. They should eventually be off unless a
-  compile-time or explicit switch turns them on. The firmware switches already
-  exist (`CAMERA_ENABLED`, `MIC_ENABLED`, `LOOP_TIMING` in
-  `firmware/platformio.ini`). The brain trace does not have a switch yet.
 
-### First step tomorrow
+### Next
 
-Restore the microphone before the camera, without putting WebSocket sends back
-on the Arduino loop.
-
-The smallest safe change is a bounded uplink queue for microphone frames,
-modelled on the existing outbound JSON queue: the capture task or the loop
-only enqueues, the link task is the only sender, a full queue drops a frame
-and counts it, and one link-task turn sends at most one frame so incoming
-speaker audio is still read. Leave `MIC_ENABLED=0` for that build. Confirm a
-queued frame is sent and the control loop stays on its servo and OLED timers.
-Only then set `MIC_ENABLED=1`, keep `CAMERA_ENABLED=0` and `LOOP_TIMING=1`,
-and compare command latency and a speech trace with this checkpoint.
+Natural servo motion: half-cosine ease on commanded pan and tilt, then subtle
+idle movement while awake. Not started. The brain still sends `glance off` on
+connect, so the firmware's existing idle glances do not run in normal use.
 
 ---
 

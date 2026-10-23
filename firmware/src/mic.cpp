@@ -74,10 +74,14 @@ void Mic::task() {
     level_ = sqrtf(sumSq / n);
 
     if (streaming_ && n == FRAME_SAMPLES) {
-      // If loop() has fallen behind, drop the oldest frame rather than block.
+      // If the link task has fallen behind, drop the oldest frame rather than
+      // block PDM capture. The link task reports these counters every 2 s.
       if (uxQueueSpacesAvailable(queue_) == 0) {
         static uint8_t scratch[FRAME_BYTES];
-        xQueueReceive(queue_, scratch, 0);
+        if (xQueueReceive(queue_, scratch, 0) == pdTRUE) {
+          droppedWindow_.fetch_add(1);
+          droppedTotal_.fetch_add(1);
+        }
       }
       xQueueSend(queue_, frame, 0);
     }

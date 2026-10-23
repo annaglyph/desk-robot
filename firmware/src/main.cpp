@@ -70,9 +70,7 @@ struct TimingAcc {
   void reset() { maxUs = 0; sumUs = 0; n = 0; }
 };
 
-static TimingAcc timeLoop, timeMic, timeServo, timeOled;
-static uint32_t micFramesWindow = 0;
-static uint32_t micBurstMax = 0;
+static TimingAcc timeLoop, timeServo, timeOled;
 static uint32_t nextTimingMs = 0;
 static uint32_t lastSlowMs = 0;
 
@@ -286,6 +284,11 @@ void setup() {
 
 #if HAVE_BRAIN
   brainLink.onAudio([](const uint8_t* pcm, size_t len) { speaker.feed(pcm, len); });
+#if MIC_ENABLED
+  // PDM capture owns the existing 16-frame queue; the link task is its only
+  // WebSocket consumer. The Arduino loop only applies mic on/off commands.
+  brainLink.onMic(&mic);
+#endif
   brainLink.onSpeech([](bool begin, size_t bytes) {
     if (begin) speaker.beginSpeech(bytes);
     else speaker.endSpeech();
@@ -352,28 +355,6 @@ void loop() {
   // command that was already queued.
   brainLink.pollState();
   brainLink.drainCommands();
-#if MIC_ENABLED
-  {
-    // Still compiled for the flag, but sendBinary only runs on the link task.
-    // Turning the mic back on needs the checkpoint 3 queue; these frames drop.
-    static uint8_t frame[Mic::FRAME_BYTES];
-#if LOOP_TIMING
-    uint32_t tMic = micros();
-    uint32_t micSent = 0;
-#endif
-    while (brainLink.connected() && mic.nextFrame(frame)) {
-      brainLink.sendBinary(0x01, frame, sizeof(frame));
-#if LOOP_TIMING
-      micSent++;
-#endif
-    }
-#if LOOP_TIMING
-    timeMic.add(sinceUs(tMic));
-    micFramesWindow += micSent;
-    if (micSent > micBurstMax) micBurstMax = micSent;
-#endif
-  }
-#endif
 #if CAMERA_ENABLED
   if (brainLink.connected() && camera.streaming()) {
     static uint8_t* jpg = static_cast<uint8_t*>(ps_malloc(64 * 1024));
@@ -448,24 +429,12 @@ void loop() {
   if (millis() >= nextTimingMs) {
     nextTimingMs = millis() + 2000;
     int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
-#if MIC_ENABLED
-    Serial.printf(
-        "loop ms avg/max: loop %u/%u servo %u/%u oled %u/%u mic %u/%u burst %u fr %u mq %d age %u q %d odrop %u rssi %d\n",
-        timeLoop.avgMs(), timeLoop.maxMs(), timeServo.avgMs(), timeServo.maxMs(),
-        timeOled.avgMs(), timeOled.maxMs(), timeMic.avgMs(), timeMic.maxMs(),
-        micBurstMax, micFramesWindow, mic.queued(), brainLink.takeCommandAgeMax(),
-        brainLink.commandQueued(), brainLink.takeOutboundDrops(), rssi);
-    micFramesWindow = 0;
-    micBurstMax = 0;
-#else
     Serial.printf(
         "loop ms avg/max: loop %u/%u servo %u/%u oled %u/%u age %u q %d odrop %u rssi %d\n",
         timeLoop.avgMs(), timeLoop.maxMs(), timeServo.avgMs(), timeServo.maxMs(),
         timeOled.avgMs(), timeOled.maxMs(), brainLink.takeCommandAgeMax(),
         brainLink.commandQueued(), brainLink.takeOutboundDrops(), rssi);
-#endif
     timeLoop.reset();
-    timeMic.reset();
     timeServo.reset();
     timeOled.reset();
   }

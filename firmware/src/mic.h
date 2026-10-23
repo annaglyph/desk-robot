@@ -1,17 +1,18 @@
 #pragma once
 
 #include <Arduino.h>
+#include <atomic>
 
 // Mic: the Sense board's PDM microphone → 16 kHz mono s16le frames.
 //
 // A capture task reads the I2S peripheral in 30 ms chunks and drops each one
 // into a queue of 16 (~0.5 s). If the queue is full the oldest frame is
-// dropped. loop() drains whatever is queued and ships it to the brain
-// (the WebSocket client isn't safe to call from another task). That drain
-// is not bounded: every queued frame is sent before the next command read.
+// dropped. The dedicated link task pops at most four frames after each
+// incoming WebSocket turn and ships them to the brain. The Arduino loop only
+// enables or disables streaming; it never calls the WebSocket client.
 //
 // MIC_ENABLED=0 (see config.h) skips begin(): no PDM clock, no capture
-// task, and loop() does not transmit frames.
+// task, or queued microphone frames.
 
 class Mic {
  public:
@@ -28,6 +29,11 @@ class Mic {
   // Frames waiting to be sent. 0 when the capture task was not started.
   int queued() const;
 
+  // Frames discarded because the 16-frame capture queue was full. The window
+  // count is read-and-cleared by the link task's two-second diagnostics.
+  uint32_t takeDroppedWindow() { return droppedWindow_.exchange(0); }
+  uint32_t droppedTotal() const { return droppedTotal_.load(); }
+
   // RMS (0..1) of the most recent frame, for level checks over serial.
   float level() const { return level_; }
 
@@ -38,5 +44,7 @@ class Mic {
   QueueHandle_t queue_ = nullptr;
   volatile bool streaming_ = false;
   volatile float level_ = 0.0f;
+  std::atomic<uint32_t> droppedWindow_{0};
+  std::atomic<uint32_t> droppedTotal_{0};
   float gain_ = 1.0f;
 };
