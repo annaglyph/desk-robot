@@ -54,8 +54,10 @@ bool Camera::begin() {
   }
   sensor_t* s = esp_camera_sensor_get();
   if (s != nullptr) {
-    s->set_vflip(s, CAMERA_VFLIP ? 1 : 0);
-    s->set_hmirror(s, CAMERA_HMIRROR ? 1 : 0);
+    // set_vflip(0) also clears REG04 VREF_EN, which the sensor's default
+    // leaves enabled. Call these only to turn a flip on.
+    if (CAMERA_VFLIP) s->set_vflip(s, 1);
+    if (CAMERA_HMIRROR) s->set_hmirror(s, 1);
   }
 
   latest_ = static_cast<uint8_t*>(ps_malloc(LATEST_CAP));

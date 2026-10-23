@@ -5,6 +5,7 @@
 #include <cstring>
 #include <lwip/sockets.h>
 
+#include "camera.h"
 #include "config.h"
 #include "mic.h"
 #include "ws_probe.h"
@@ -175,6 +176,9 @@ void Link::task() {
     }
 
     if (idleHook_) idleHook_();
+    // After speak_done and the microphone. One frame, and only when the
+    // socket already has room, so a JPEG never starts ahead of audio.
+    if (wifiUp) drainCamera();
 
 #if LOOP_TIMING
     if (millis() >= nextNetMs) {
@@ -315,6 +319,23 @@ void Link::drainMic() {
       micFailuresWindow_++;
     }
   }
+}
+
+void Link::drainCamera() {
+  if (!connected() || camera_ == nullptr || !camera_->streaming()) return;
+  // A writable socket has room for another microphone frame, not for a whole
+  // JPEG. sendBinary still writes the entire WebSocket frame before it
+  // returns: WiFiClient::write waits up to a second per attempt and, while
+  // any bytes are accepted, keeps going until the frame is finished. Stopping
+  // early would leave a partial frame on the connection. The bound here is
+  // one frame per pass, started only after incoming audio, outbound control
+  // messages, and the microphone queue have had their turn.
+  if (!socketWritable()) return;
+  static uint8_t* jpg = static_cast<uint8_t*>(ps_malloc(64 * 1024));
+  if (jpg == nullptr) return;
+  size_t n = camera_->takeFrame(jpg, 64 * 1024);
+  if (n == 0) return;
+  sendBinary(0x02, jpg, n);
 }
 
 // lwIP marks a TCP socket writable only while more than TCP_SNDLOWAT (2,880

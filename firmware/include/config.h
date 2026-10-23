@@ -69,10 +69,11 @@ constexpr float MIC_GAIN = 6.0f;
 #endif
 
 // ─── Camera ──────────────────────────────────────────────────────────────────
-// The camera is mounted ribbon-up on the head, which puts the sensor upside
-// down: flip + mirror = rotate 180 degrees.
-constexpr bool CAMERA_VFLIP = true;
-constexpr bool CAMERA_HMIRROR = true;
+// Ribbon-up on the head. The OV2640 starts with neither flip set. Enabling
+// both rotates that image 180 degrees, and on this mount the result was
+// upside down, so both stay off. Enabling only one would mirror it.
+constexpr bool CAMERA_VFLIP = false;
+constexpr bool CAMERA_HMIRROR = false;
 
 // Diagnostic switch. 0 skips sensor init, the capture task, and JPEG
 // transmission so command latency and audio can be compared with the camera

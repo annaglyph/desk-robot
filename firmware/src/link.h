@@ -7,6 +7,7 @@
 #include <lwip/sockets.h>
 
 class Mic;
+class Camera;
 
 // The library keeps its WiFiClient protected. This exposes only the socket
 // descriptor so the link task can test writability before a mic frame.
@@ -59,6 +60,10 @@ class Link {
   // frames over the socket.
   void onMic(Mic* mic) { mic_ = mic; }
 
+  // The link task sends at most one JPEG per pass, after microphone uplink
+  // and outbound control messages. The Arduino loop never sends camera frames.
+  void onCamera(Camera* camera) { camera_ = camera; }
+
   // Called on the link task after each WebSocket turn. Used for speak_done.
   void setIdleHook(IdleHook hook) { idleHook_ = hook; }
 
@@ -96,6 +101,7 @@ class Link {
   void enqueueCommand(const char* text);
   void drainOutbound();
   void drainMic();
+  void drainCamera();
   bool socketWritable();
   void noteCmdDrop(const char* text);
   void noteOutDrop();
@@ -107,6 +113,7 @@ class Link {
   SpeechHandler onSpeech_;
   IdleHook idleHook_ = nullptr;
   Mic* mic_ = nullptr;
+  Camera* camera_ = nullptr;
   TaskHandle_t task_ = nullptr;
   QueueHandle_t cmdQ_ = nullptr;
   QueueHandle_t outQ_ = nullptr;

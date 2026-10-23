@@ -289,6 +289,11 @@ void setup() {
   // WebSocket consumer. The Arduino loop only applies mic on/off commands.
   brainLink.onMic(&mic);
 #endif
+#if CAMERA_ENABLED
+  // The capture task keeps the latest JPEG. The link task sends it after
+  // microphone uplink, so the Arduino loop never touches the socket.
+  brainLink.onCamera(&camera);
+#endif
   brainLink.onSpeech([](bool begin, size_t bytes) {
     if (begin) speaker.beginSpeech(bytes);
     else speaker.endSpeech();
@@ -355,13 +360,6 @@ void loop() {
   // command that was already queued.
   brainLink.pollState();
   brainLink.drainCommands();
-#if CAMERA_ENABLED
-  if (brainLink.connected() && camera.streaming()) {
-    static uint8_t* jpg = static_cast<uint8_t*>(ps_malloc(64 * 1024));
-    size_t n = jpg ? camera.takeFrame(jpg, 64 * 1024) : 0;
-    if (n > 0) brainLink.sendBinary(0x02, jpg, n);
-  }
-#endif
   if (brainLink.connected() && now >= nextTempMs) {
     nextTempMs = now + 10000;
     brainLink.sendJson(String("{\"type\":\"temp\",\"c\":") + String(temperatureRead(), 1) + "}");

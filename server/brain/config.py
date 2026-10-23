@@ -226,7 +226,10 @@ TRACK_HFOV = 62.0          # camera field of view, degrees (OV2640 stock lens)
 TRACK_VFOV = 48.0
 TRACK_GAIN = 0.5           # fraction of the error corrected per frame (lower = calmer)
 TRACK_DEADBAND = 0.10      # ignore errors smaller than this fraction of half-frame
-TRACK_PAN_SIGN = 1         # flip to -1 if the head turns AWAY from you
+# Image-right is positive ex. On this head that must decrease pan: with the
+# sign at +1 the head turned away once the picture was upright. Tilt already
+# negates ey, and that direction is correct, so only pan changes here.
+TRACK_PAN_SIGN = -1
 TRACK_TILT_SIGN = 1        # flip to -1 if it nods the wrong way
 TRACK_PAN_LIMIT = 70.0     # must match PAN_MIN/MAX_DEG in firmware config.h
 TRACK_TILT_MIN = -75.0     # must match TILT_MIN_DEG in firmware config.h
