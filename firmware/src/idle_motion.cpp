@@ -75,13 +75,24 @@ void IdleMotion::setPreset(const char* name) {
     longPct_ = 8;
     preset_ = "lively";
   } else {
-    amp_ = 1.0f;
-    durScale_ = 1.0f;
-    pauseMin_ = 2000;
-    pauseMax_ = 6000;
+    // Preferred desk Curious: a little larger and quicker than the laboratory's
+    // 1.0 / 1.0 / 2000–6000, still short of Lively.
+    amp_ = 1.20f;
+    durScale_ = 0.85f;
+    pauseMin_ = 2500;
+    pauseMax_ = 5500;
     longPct_ = 12;
     preset_ = "curious";
   }
+}
+
+void IdleMotion::setAmplitude(float scale) { amp_ = scale; }
+
+void IdleMotion::setDurationScale(float scale) { durScale_ = scale; }
+
+void IdleMotion::setPause(uint32_t minMs, uint32_t maxMs) {
+  pauseMin_ = minMs;
+  pauseMax_ = maxMs;
 }
 
 void IdleMotion::noteActivity(uint32_t nowMs) {

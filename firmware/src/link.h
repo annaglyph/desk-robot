@@ -90,6 +90,11 @@ class Link {
   // Reply to a `glance` that carried an id. Pan and tilt are the neck's
   // current angles once that glance has been applied.
   void sendIdleAck(uint32_t id, bool idle, float panDeg, float tiltDeg);
+  // Reply to an idle_style command. The numbers are the configuration now
+  // in effect. error is set when the command was rejected and nothing changed.
+  void sendIdleStyleAck(uint32_t id, bool ok, const char* preset, float scale,
+                        float duration, uint32_t pauseMin, uint32_t pauseMax,
+                        const char* error = nullptr);
   // Binary frame: one type byte (0x01 = mic audio, 0x02 = JPEG) + payload.
   // Only the link task may call this. Other callers are ignored and return
   // false. The result is the WebSocket library's binary-send result.

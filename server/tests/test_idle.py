@@ -444,5 +444,206 @@ class IdleLoopTests(HeadOwnershipBase):
             main.awake_until = saved
 
 
+class StyleRobot:
+    """Speaks the idle_style_ack the firmware would, without moving a head."""
+
+    def __init__(self, firmware=None, reject_field=None, answer=True):
+        self.sent = []
+        self.firmware = {"preset": "curious", **config.IDLE_PRESETS["curious"]}
+        if firmware:
+            self.firmware.update(firmware)
+        self.reject_field = reject_field
+        self.answer = answer
+
+    async def send(self, text):
+        msg = json.loads(text)
+        self.sent.append(msg)
+        if not self.answer or msg.get("type") != "idle_style":
+            return
+        event = {"type": "idle_style_ack", "id": msg.get("id"), "ok": True, **self.firmware}
+        if self.reject_field and self.reject_field in msg and not msg.get("read"):
+            event["ok"] = False
+            event["error"] = self.reject_field
+        elif msg.get("read"):
+            pass
+        elif "preset" in msg and "scale" in msg:
+            self.firmware = {
+                "preset": msg["preset"], "scale": msg["scale"], "duration": msg["duration"],
+                "pause_min": msg["pause_min"], "pause_max": msg["pause_max"],
+            }
+            event = {"type": "idle_style_ack", "id": msg.get("id"), "ok": True, **self.firmware}
+        elif "preset" in msg:
+            self.firmware = {"preset": msg["preset"], **config.IDLE_PRESETS[msg["preset"]]}
+            event = {"type": "idle_style_ack", "id": msg.get("id"), "ok": True, **self.firmware}
+        elif "scale" in msg:
+            self.firmware["scale"] = msg["scale"]
+            event.update(self.firmware)
+        elif "duration" in msg:
+            self.firmware["duration"] = msg["duration"]
+            event.update(self.firmware)
+        elif "pause_min" in msg:
+            self.firmware["pause_min"] = msg["pause_min"]
+            self.firmware["pause_max"] = msg["pause_max"]
+            event.update(self.firmware)
+        asyncio.get_running_loop().call_soon(main._resolve_style_ack, event)
+
+
+class IdleStyleTests(HeadOwnershipBase):
+    """Personalities are configured, not a second motion engine."""
+
+    def setUp(self):
+        super().setUp()
+        self._saved_style = (
+            main.idle_personality,
+            {name: dict(knobs) for name, knobs in main.idle_personalities.items()},
+            main.idle_confirmed,
+        )
+        main.idle_personalities = main._fresh_personalities()
+        main.idle_personality = "curious"
+        main.idle_confirmed = False
+        main.pose_synced = True
+        main.idle_sent = False
+
+    def tearDown(self):
+        main.idle_personality, personalities, main.idle_confirmed = self._saved_style
+        main.idle_personalities = personalities
+        main._style_waiters.clear()
+        super().tearDown()
+
+    def test_curious_starts_at_the_preferred_desk_settings(self):
+        self.assertEqual(config.IDLE_PRESETS["curious"], {
+            "scale": 1.2, "duration": 0.85, "pause_min": 2500, "pause_max": 5500,
+        })
+        self.assertEqual(config.IDLE_PRESETS["calm"], {
+            "scale": 0.70, "duration": 1.30, "pause_min": 3500, "pause_max": 8000,
+        })
+        self.assertEqual(config.IDLE_PRESETS["lively"], {
+            "scale": 1.10, "duration": 0.80, "pause_min": 1200, "pause_max": 3500,
+        })
+
+    def test_selecting_a_default_personality_sends_only_the_preset(self):
+        robot = StyleRobot()
+        main.robot_socket = robot
+        gen = main.tracker.pose_gen
+        asyncio.run(main._apply_idle_style({"name": "lively"}))
+        sent = robot.sent[0]
+        self.assertEqual(sent["type"], "idle_style")
+        self.assertEqual(sent["preset"], "lively")
+        self.assertNotIn("scale", sent)
+        self.assertEqual(main.idle_personality, "lively")
+        self.assertTrue(main.idle_confirmed)
+        self.assertEqual(main.idle_personalities["lively"]["pause_min"], 1200)
+        self.assertIs(main.idle_sent, False)
+        self.assertTrue(main.pose_synced)
+        self.assertEqual(main.tracker.pose_gen, gen)
+        self.assertFalse(any(m["type"] in ("glance", "pan", "tilt") for m in robot.sent))
+
+    def test_each_personality_keeps_its_own_knobs(self):
+        robot = StyleRobot()
+        main.robot_socket = robot
+        asyncio.run(main._apply_idle_style({"scale": 0.5}))
+        self.assertEqual(robot.sent[0]["scale"], 0.5)
+        self.assertNotIn("preset", robot.sent[0])
+        self.assertEqual(main.idle_personalities["curious"]["scale"], 0.5)
+        self.assertEqual(main.idle_personalities["calm"]["scale"], 0.70)
+        self.assertEqual(main.idle_personalities["lively"]["scale"], 1.10)
+        asyncio.run(main._apply_idle_style({"name": "calm"}))
+        self.assertEqual(robot.sent[-1]["preset"], "calm")
+        self.assertNotIn("scale", robot.sent[-1])
+        self.assertEqual(main.idle_personalities["curious"]["scale"], 0.5)
+        asyncio.run(main._apply_idle_style({"name": "curious"}))
+        restored = robot.sent[-1]
+        self.assertEqual(restored["preset"], "curious")
+        self.assertEqual(restored["scale"], 0.5)
+        self.assertEqual(restored["pause_min"], 2500)
+        self.assertEqual(main.idle_personalities["calm"]["pause_max"], 8000)
+
+    def test_reset_restores_only_the_selected_personality(self):
+        robot = StyleRobot()
+        main.robot_socket = robot
+        main.idle_personalities["lively"]["scale"] = 1.4
+        asyncio.run(main._apply_idle_style({"scale": 0.5}))
+        asyncio.run(main._apply_idle_style({"reset": True}))
+        reset = robot.sent[-1]
+        self.assertEqual(reset["preset"], "curious")
+        self.assertNotIn("scale", reset)
+        self.assertEqual(main.idle_personalities["curious"]["scale"], 1.2)
+        self.assertEqual(main.idle_personalities["lively"]["scale"], 1.4)
+        self.assertFalse(main.console_state()["idle"]["adjusted"])
+
+    def test_pause_minimum_above_maximum_is_rejected_before_send(self):
+        robot = StyleRobot()
+        main.robot_socket = robot
+        with self.assertRaises(ValueError):
+            asyncio.run(main._apply_idle_style({"pause_min": 4000, "pause_max": 1000}))
+        self.assertEqual(robot.sent, [])
+        self.assertFalse(main.idle_confirmed)
+
+    def test_scale_outside_the_calibrator_range_is_rejected_before_send(self):
+        robot = StyleRobot()
+        main.robot_socket = robot
+        for bad in (0.29, 1.51, 2):
+            with self.assertRaises(ValueError):
+                asyncio.run(main._apply_idle_style({"scale": bad}))
+        with self.assertRaises(ValueError):
+            asyncio.run(main._apply_idle_style({"duration": 0.39}))
+        with self.assertRaises(ValueError):
+            asyncio.run(main._apply_idle_style({"pause_min": 199, "pause_max": 1000}))
+        self.assertEqual(robot.sent, [])
+
+    def test_a_rejected_ack_does_not_keep_the_requested_value(self):
+        robot = StyleRobot(reject_field="scale")
+        main.robot_socket = robot
+        asyncio.run(main._read_idle_style())
+        with self.assertRaises(ValueError):
+            asyncio.run(main._apply_idle_style({"scale": 0.9}))
+        self.assertEqual(main.idle_personalities["curious"]["scale"], 1.2)
+        self.assertTrue(main.idle_confirmed)
+        self.assertEqual(main.console_state()["idle"]["scale"], 1.2)
+
+    def test_claim_does_not_send_a_personality(self):
+        robot = FakeRobot()
+        main.robot_socket = robot
+        main.idle_sent = None
+        asyncio.run(main._claim_on_connect())
+        self.assertEqual(robot.sent[0]["type"], "glance")
+        self.assertFalse(any(m.get("type") == "idle_style" for m in robot.sent))
+        self.assertIs(main.idle_sent, False)
+
+    def test_reconnect_reads_the_firmware_and_leaves_other_personalities(self):
+        robot = StyleRobot(firmware={"preset": "lively", **config.IDLE_PRESETS["lively"]})
+        main.robot_socket = robot
+        main.idle_personalities["curious"]["scale"] = 0.5
+        main.idle_personality = "curious"
+        asyncio.run(main._read_idle_style())
+        self.assertEqual(set(robot.sent[0]), {"type", "id", "read"})
+        self.assertTrue(robot.sent[0]["read"])
+        self.assertEqual(main.idle_personality, "lively")
+        self.assertTrue(main.idle_confirmed)
+        self.assertEqual(main.idle_personalities["curious"]["scale"], 0.5)
+        self.assertEqual(main.idle_personalities["lively"]["scale"], 1.10)
+        self.assertIs(main.idle_sent, False)
+        self.assertTrue(main.pose_synced)
+
+    def test_a_missed_read_does_not_present_stale_knobs(self):
+        robot = StyleRobot(answer=False)
+        main.robot_socket = robot
+        main.idle_personalities["curious"]["scale"] = 0.5
+        with patch.object(config, "IDLE_ACK_SECONDS", 0.05):
+            asyncio.run(main._read_idle_style())
+        self.assertFalse(main.idle_confirmed)
+        shown = main.console_state()["idle"]
+        self.assertIsNone(shown["personality"])
+        self.assertNotIn("scale", shown)
+
+    def test_disconnect_hides_knobs_but_keeps_the_session(self):
+        main.idle_confirmed = True
+        main.idle_personalities["calm"]["scale"] = 0.4
+        main._reset_head_ownership()
+        self.assertFalse(main.idle_confirmed)
+        self.assertEqual(main.idle_personalities["calm"]["scale"], 0.4)
+        self.assertNotIn("scale", main.console_state()["idle"])
+
+
 if __name__ == "__main__":
     unittest.main()

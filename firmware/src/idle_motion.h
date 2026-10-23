@@ -23,6 +23,11 @@ class IdleMotion {
   void setEnabled(bool on);
   bool enabled() const { return enabled_; }
   void setPreset(const char* name);
+  // Knobs for the next gesture. They do not start or stop idle, and they
+  // leave the current curve running.
+  void setAmplitude(float scale);
+  void setDurationScale(float scale);
+  void setPause(uint32_t minMs, uint32_t maxMs);
   // Brain connected and awake. Closing the gate stops a gesture immediately.
   void setGate(bool open);
 
@@ -56,10 +61,10 @@ class IdleMotion {
   bool enabled_ = false;
   bool gate_ = false;
   const char* preset_ = "curious";
-  float amp_ = 1.0f;
-  float durScale_ = 1.0f;
-  uint32_t pauseMin_ = 2000;
-  uint32_t pauseMax_ = 6000;
+  float amp_ = 1.20f;
+  float durScale_ = 0.85f;
+  uint32_t pauseMin_ = 2500;
+  uint32_t pauseMax_ = 5500;
   int longPct_ = 12;
 
   int lastPanSign_ = 0;

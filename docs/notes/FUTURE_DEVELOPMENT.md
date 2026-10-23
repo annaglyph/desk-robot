@@ -419,26 +419,17 @@ Higher-priority actions should interrupt idle movements smoothly, without abrupt
 
 ### Motion Personality — Web UI Controls & Time-of-Day Behaviour
 
-**Status:** Future development — not for immediate implementation.
+**Status:** Web controls are in the live-view page. Time of day is still future work.
 
-The standalone ESP32 motion laboratory now has three successful idle personality
-presets: `calm`, `curious`, and `lively`. All three have been tested on the fully
-assembled Rocky and work well.
+The live view's Idle personality section selects Calm, Curious, or Lively and
+can adjust amplitude, duration, and the pause range. The firmware still
+generates every gesture. Choosing a personality does not turn idle on or off.
 
-**Future enhancements:**
+**Still future:**
 
-- Expose Calm / Curious / Lively presets in the existing brain web UI.
-- Add live controls for movement amplitude (`scale`), duration multiplier
-  (`duration`), and hold-time range (`pause`).
-- Allow adjustments without reflashing firmware.
 - Explore automatic time-of-day personalities: lively in the morning, curious
   during the day, calm in the evening.
 - Allow manual selection to override automatic scheduling.
-- Integrate with the production motion controller without duplicating the
-  experimental motion engine.
-- Bring the tested idle choreography and the 16-bit PWM resolution into
-  Rocky's production firmware. Production motion behaviour stays unchanged
-  until that work is done deliberately.
 
 **Reference settings:** Curious with `scale 1.2`, `duration 0.85`, and
 `pause 2500 5500` was particularly successful, although it begins to approach

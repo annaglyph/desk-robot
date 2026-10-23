@@ -94,7 +94,9 @@ void printHelp() {
   Serial.println(F("  demo on|off  idle life: auto blinks and emotion changes"));
   Serial.println(F("  glance on|off [id]  same switch as idle on|off; an id replies idle_ack"));
   Serial.println(F("  idle on|off  curious head motion while awake and connected"));
-  Serial.println(F("  idle calm|curious|lively   preset only; idle on to run it"));
+  Serial.println(F("  idle calm|curious|lively   preset only; does not turn idle on"));
+  Serial.println(F("  idle scale <0.3-1.5> | duration <0.4-2> | pause <minMs> <maxMs>"));
+  Serial.println(F("  idle read        print the active personality"));
   Serial.println(F("  idle status"));
   Serial.println(F("  The brain switches idle itself; typing idle on here is for tests only."));
   Serial.println(F("  volume <0-1> speaker volume"));
@@ -105,6 +107,68 @@ void printHelp() {
   Serial.println(F("  snap         grab one frame and report its size"));
   Serial.println(F("  temp         chip temperature"));
   Serial.println(F("  help         this text"));
+}
+
+static bool idleDigits(const String& s) {
+  if (s.length() == 0) return false;
+  for (unsigned i = 0; i < s.length(); ++i) {
+    char c = s[i];
+    if (c < '0' || c > '9') return false;
+  }
+  return true;
+}
+
+static int idleWords(const String& rest, String* out, int max) {
+  int n = 0;
+  unsigned i = 0;
+  while (i < rest.length() && n < max) {
+    while (i < rest.length() && rest[i] == ' ') i++;
+    if (i >= rest.length()) break;
+    unsigned j = i;
+    while (j < rest.length() && rest[j] != ' ') j++;
+    out[n++] = rest.substring(i, j);
+    i = j;
+  }
+  return n;
+}
+
+// A trailing all-digit token is the brain's request id when the command
+// already has its required words. Serial use omits it.
+static uint32_t idleOptionalId(String* words, int& n, int need) {
+  if (n == need + 1 && idleDigits(words[n - 1])) {
+    uint32_t id = static_cast<uint32_t>(words[n - 1].toInt());
+    n--;
+    return id;
+  }
+  return 0;
+}
+
+static bool idleKnown(const String& name) {
+  return name == "calm" || name == "curious" || name == "lively";
+}
+
+static bool idleScaleOk(float v) { return v >= 0.3f && v <= 1.5f; }
+static bool idleDurOk(float v) { return v >= 0.4f && v <= 2.0f; }
+static bool idlePauseOk(long lo, long hi) { return lo >= 200 && hi <= 30000 && lo <= hi; }
+
+static void replyIdleStyle(uint32_t id, bool ok, const char* error = nullptr) {
+  if (id == 0) return;
+#if HAVE_BRAIN
+  brainLink.sendIdleStyleAck(id, ok, idleMotion.preset(), idleMotion.amplitude(),
+                             idleMotion.durationScale(), idleMotion.pauseMin(),
+                             idleMotion.pauseMax(), error);
+#else
+  (void)ok;
+  (void)error;
+#endif
+}
+
+static void printIdlePreset() {
+  Serial.printf("idle preset %s — scale %.2f, duration %.2f, hold %lu-%lu ms\n",
+                idleMotion.preset(), idleMotion.amplitude(), idleMotion.durationScale(),
+                static_cast<unsigned long>(idleMotion.pauseMin()),
+                static_cast<unsigned long>(idleMotion.pauseMax()));
+  if (!idleMotion.enabled()) Serial.println(F("idle is off"));
 }
 
 void handleCommand(String line, uint32_t ageMs = 0) {
@@ -263,7 +327,15 @@ void handleCommand(String line, uint32_t ageMs = 0) {
   } else if (cmd == "idle") {
     String which = arg;
     which.toLowerCase();
-    if (which == "on") {
+    int spIdle = which.indexOf(' ');
+    String sub = spIdle < 0 ? which : which.substring(0, spIdle);
+    String rest = spIdle < 0 ? String() : which.substring(spIdle + 1);
+    rest.trim();
+    String words[6];
+    int n = idleWords(rest, words, 6);
+    // These paths change numbers used by the next gesture. They do not
+    // enable idle, and they do not rewrite a gesture already in progress.
+    if (sub == "on") {
       idleMotion.setEnabled(true);
       applyIdleGate();
       Serial.printf("idle on (%s)\n", idleMotion.preset());
@@ -272,21 +344,92 @@ void handleCommand(String line, uint32_t ageMs = 0) {
       } else if (face.asleep()) {
         Serial.println(F("waiting until awake"));
       }
-    } else if (which == "off") {
+    } else if (sub == "off") {
       idleMotion.setEnabled(false);
       applyIdleGate();
       Serial.println(F("idle off"));
-    } else if (which == "calm" || which == "curious" || which == "lively") {
-      idleMotion.setPreset(which.c_str());
-      Serial.printf("idle preset %s — scale %.2f, duration %.2f, hold %lu-%lu ms\n",
-                    idleMotion.preset(), idleMotion.amplitude(), idleMotion.durationScale(),
-                    static_cast<unsigned long>(idleMotion.pauseMin()),
-                    static_cast<unsigned long>(idleMotion.pauseMax()));
-      if (!idleMotion.enabled()) Serial.println(F("idle is off"));
-    } else if (which == "status") {
-      idleMotion.printStatus(brainConnected, face.asleep(), speaker.speaking());
+    } else if (sub == "status" || sub == "read") {
+      uint32_t id = idleOptionalId(words, n, 0);
+      if (sub == "status" || n == 0) {
+        if (sub == "status") idleMotion.printStatus(brainConnected, face.asleep(), speaker.speaking());
+        else printIdlePreset();
+        replyIdleStyle(id, true);
+      } else {
+        Serial.println(F("idle read"));
+        replyIdleStyle(id, false, "read");
+      }
+    } else if (sub == "calm" || sub == "curious" || sub == "lively") {
+      uint32_t id = idleOptionalId(words, n, 0);
+      if (n != 0) {
+        Serial.println(F("idle calm|curious|lively"));
+        replyIdleStyle(id, false, "preset");
+      } else {
+        idleMotion.setPreset(sub.c_str());
+        printIdlePreset();
+        replyIdleStyle(id, true);
+      }
+    } else if (sub == "set") {
+      uint32_t id = idleOptionalId(words, n, 5);
+      float scale = n >= 2 ? words[1].toFloat() : 0;
+      float dur = n >= 3 ? words[2].toFloat() : 0;
+      long lo = n >= 4 ? words[3].toInt() : -1;
+      long hi = n >= 5 ? words[4].toInt() : -1;
+      const char* err = nullptr;
+      if (n != 5 || !idleKnown(words[0])) err = "preset";
+      else if (!idleScaleOk(scale)) err = "scale";
+      else if (!idleDurOk(dur)) err = "duration";
+      else if (!idlePauseOk(lo, hi)) err = "pause";
+      if (err != nullptr) {
+        Serial.printf("idle set rejected: %s\n", err);
+        replyIdleStyle(id, false, err);
+      } else {
+        idleMotion.setPreset(words[0].c_str());
+        idleMotion.setAmplitude(scale);
+        idleMotion.setDurationScale(dur);
+        idleMotion.setPause(static_cast<uint32_t>(lo), static_cast<uint32_t>(hi));
+        printIdlePreset();
+        replyIdleStyle(id, true);
+      }
+    } else if (sub == "scale") {
+      uint32_t id = idleOptionalId(words, n, 1);
+      float scale = n == 1 ? words[0].toFloat() : 0;
+      if (n != 1 || words[0].length() == 0 || !idleScaleOk(scale)) {
+        Serial.println(F("idle scale 0.3-1.5"));
+        replyIdleStyle(id, false, "scale");
+      } else {
+        idleMotion.setAmplitude(scale);
+        Serial.printf("idle scale %.2f (%s)\n", idleMotion.amplitude(), idleMotion.preset());
+        replyIdleStyle(id, true);
+      }
+    } else if (sub == "duration") {
+      uint32_t id = idleOptionalId(words, n, 1);
+      float scale = n == 1 ? words[0].toFloat() : 0;
+      if (n != 1 || words[0].length() == 0 || !idleDurOk(scale)) {
+        Serial.println(F("idle duration 0.4-2.0"));
+        replyIdleStyle(id, false, "duration");
+      } else {
+        idleMotion.setDurationScale(scale);
+        Serial.printf("idle duration %.2f (%s)\n", idleMotion.durationScale(), idleMotion.preset());
+        replyIdleStyle(id, true);
+      }
+    } else if (sub == "pause") {
+      uint32_t id = idleOptionalId(words, n, 2);
+      long lo = n >= 1 ? words[0].toInt() : -1;
+      long hi = n >= 2 ? words[1].toInt() : -1;
+      if (n != 2 || !idlePauseOk(lo, hi)) {
+        Serial.println(F("idle pause <minMs> <maxMs>, 200-30000, min <= max"));
+        replyIdleStyle(id, false, "pause");
+      } else {
+        idleMotion.setPause(static_cast<uint32_t>(lo), static_cast<uint32_t>(hi));
+        Serial.printf("idle hold %lu-%lu ms (%s)\n",
+                      static_cast<unsigned long>(idleMotion.pauseMin()),
+                      static_cast<unsigned long>(idleMotion.pauseMax()),
+                      idleMotion.preset());
+        replyIdleStyle(id, true);
+      }
     } else {
-      Serial.println(F("idle on|off|calm|curious|lively|status"));
+      Serial.println(F("idle on|off|calm|curious|lively|status|read"));
+      Serial.println(F("idle scale <0.3-1.5> | duration <0.4-2> | pause <minMs> <maxMs>"));
     }
   } else if (cmd == "demo") {
     demoMode = (arg == "on");

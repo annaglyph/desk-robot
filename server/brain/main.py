@@ -74,6 +74,19 @@ tracker: Tracker | None = None
 idle_sent: bool | None = None
 pose_synced = False
 idle_ctl = IdleController(config.IDLE_QUIET_SECONDS)
+# One set of knobs per personality, for this brain process only. The firmware
+# holds the active set and is the authority once it has answered. Nothing
+# here turns idle on or off.
+def _fresh_personalities() -> dict[str, dict]:
+    return {name: dict(knobs) for name, knobs in config.IDLE_PRESETS.items()}
+
+
+idle_personalities = _fresh_personalities()
+idle_personality = "curious"
+idle_confirmed = False  # True only after idle_style_ack for this connection
+_style_seq = 0
+_style_waiters: dict[int, asyncio.Future] = {}
+_style_lock_ref: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None
 head_held_until = 0.0  # time.monotonic(); a deliberate look holds its pose until then
 _head_lock_ref: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None
 _ack_seq = 0
@@ -245,6 +258,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
     # It runs as a task because its idle_ack arrives through the loop below.
     _reset_head_ownership()
     asyncio.create_task(_claim_on_connect())
+    asyncio.create_task(_read_idle_style())
     try:
         async for message in websocket:
             if isinstance(message, bytes):
@@ -262,6 +276,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 continue
             if event.get("type") == "idle_ack":
                 _resolve_ack(event)
+                continue
+            if event.get("type") == "idle_style_ack":
+                _resolve_style_ack(event)
                 continue
             if event.get("type") == "state":
                 # Heartbeat every 5 s. Its pose is never used for steering:
@@ -480,15 +497,21 @@ def _head_lock() -> asyncio.Lock:
 
 def _reset_head_ownership() -> None:
     """A new or lost connection: nothing is known about idle or the pose.
-    A claim still waiting for an ack gets None and gives up."""
-    global idle_sent, pose_synced, _ack_retry_at
+    A claim still waiting for an ack gets None and gives up. Personality
+    knobs stay in this process; the page hides them until the next read."""
+    global idle_sent, pose_synced, _ack_retry_at, idle_confirmed
     idle_sent = None
     pose_synced = False
+    idle_confirmed = False
     _ack_retry_at = 0.0
     for fut in list(_ack_waiters.values()):
         if not fut.done():
             fut.set_result(None)
     _ack_waiters.clear()
+    for fut in list(_style_waiters.values()):
+        if not fut.done():
+            fut.set_result(None)
+    _style_waiters.clear()
 
 
 def _idle_debug(msg: str) -> None:
@@ -598,6 +621,123 @@ async def claim_head():
 async def _claim_on_connect() -> None:
     async with claim_head():
         pass
+
+
+def _style_lock() -> asyncio.Lock:
+    global _style_lock_ref
+    loop = asyncio.get_running_loop()
+    if _style_lock_ref is None or _style_lock_ref[0] is not loop:
+        _style_lock_ref = (loop, asyncio.Lock())
+    return _style_lock_ref[1]
+
+
+def _resolve_style_ack(event: dict) -> None:
+    fut = _style_waiters.get(event.get("id"))
+    if fut is not None and not fut.done():
+        fut.set_result(event)
+
+
+def _idle_status() -> dict:
+    """What the page may show. Knobs are included only after the firmware
+    has confirmed them for this connection."""
+    name = idle_personality
+    knobs = idle_personalities[name]
+    preset = config.IDLE_PRESETS[name]
+    body = {
+        "on": idle_sent is True,
+        "reason": idle_reason(),
+        "personality": name if idle_confirmed else None,
+        "confirmed": idle_confirmed,
+        "adjusted": idle_confirmed and any(knobs[key] != preset[key] for key in preset),
+    }
+    if idle_confirmed:
+        body.update(knobs)
+    return body
+
+
+def _adopt_style(event: dict) -> None:
+    """Copy the firmware's active personality into that one session slot."""
+    global idle_personality, idle_confirmed
+    name = event.get("preset")
+    if name not in config.IDLE_PRESETS:
+        raise ValueError("robot reported an unknown personality")
+    try:
+        idle_personalities[name] = {
+            "scale": round(float(event["scale"]), 2),
+            "duration": round(float(event["duration"]), 2),
+            "pause_min": int(event["pause_min"]),
+            "pause_max": int(event["pause_max"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("robot idle configuration was incomplete")
+    idle_personality = name
+    idle_confirmed = True
+
+
+async def _transact_idle_style(fields: dict) -> dict:
+    """One idle_style command and its ack. Does not touch pose sync."""
+    global _style_seq
+    async with _style_lock():
+        if robot_socket is None:
+            raise ValueError("no robot connected")
+        _style_seq += 1
+        rid = _style_seq
+        fut = asyncio.get_running_loop().create_future()
+        _style_waiters[rid] = fut
+        try:
+            if not await send_to_robot({"type": "idle_style", "id": rid, **fields}):
+                raise ValueError("no robot connected")
+            event = await asyncio.wait_for(fut, config.IDLE_ACK_SECONDS)
+        except asyncio.TimeoutError:
+            raise ValueError("no idle configuration reply from the robot")
+        finally:
+            _style_waiters.pop(rid, None)
+        if not event:
+            raise ValueError("no idle configuration reply from the robot")
+        if event.get("ok") is False:
+            if event.get("preset") in config.IDLE_PRESETS and "scale" in event:
+                _adopt_style(event)
+            raise ValueError(str(event.get("error") or "rejected"))
+        _adopt_style(event)
+        return _idle_status()
+
+
+async def _read_idle_style() -> None:
+    """On connect, show what the firmware is actually using."""
+    try:
+        await _transact_idle_style({"read": True})
+    except ValueError as err:
+        print(f"(idle style: {err})")
+
+
+async def _apply_idle_style(payload: dict) -> dict:
+    """A console change. The session updates from the ack, not from the request."""
+    if payload.get("reset"):
+        return await _transact_idle_style({"preset": idle_personality})
+    if "name" in payload:
+        name = payload.get("name")
+        if name not in config.IDLE_PRESETS:
+            raise ValueError("personality: calm, curious, or lively")
+        stored = idle_personalities[name]
+        defaults = config.IDLE_PRESETS[name]
+        if all(stored[key] == defaults[key] for key in defaults):
+            return await _transact_idle_style({"preset": name})
+        return await _transact_idle_style({"preset": name, **stored})
+    fields: dict = {}
+    if "scale" in payload:
+        fields["scale"] = round(_number(payload, "scale", *config.IDLE_SCALE_RANGE), 2)
+    if "duration" in payload:
+        fields["duration"] = round(_number(payload, "duration", *config.IDLE_DURATION_RANGE), 2)
+    if "pause_min" in payload or "pause_max" in payload:
+        lo = int(_number(payload, "pause_min", *config.IDLE_PAUSE_RANGE))
+        hi = int(_number(payload, "pause_max", *config.IDLE_PAUSE_RANGE))
+        if lo > hi:
+            raise ValueError("minimum pause must not exceed the maximum")
+        fields["pause_min"] = lo
+        fields["pause_max"] = hi
+    if not fields:
+        raise ValueError("name, scale, duration, pause, or reset")
+    return await _transact_idle_style(fields)
 
 
 async def _set_idle_on() -> None:
@@ -1105,7 +1245,7 @@ def console_state() -> dict:
         "emotion": current_emotion,
         "voice": {k: getattr(config, k) for k in VOICE_TUNABLE},
         "head_held": time.monotonic() < head_held_until,
-        "idle": {"on": idle_sent is True, "reason": idle_reason()},
+        "idle": _idle_status(),
         "tracking_enabled": tracker.enabled if tracker is not None else False,
         "volume": speaker_volume,
         "tuning": {k: getattr(config, k) for k in TUNABLE},
@@ -1183,6 +1323,8 @@ async def _console_command(action: str, payload: dict) -> dict:
         if ears is not None:
             ears.apply_config()
         print(f"console: {key} = {value:g} (until restart; set it in config.py to keep)")
+    elif action == "idle_style":
+        return {"idle": await _apply_idle_style(payload)}
     elif action == "voice":
         # Speaker tuning; takes effect on the next reply.
         key = payload.get("key")

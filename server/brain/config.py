@@ -244,6 +244,17 @@ IDLE_ENABLED = True
 IDLE_QUIET_SECONDS = 8.0       # nothing happening this long before idle starts
 IDLE_LOOK_HOLD_SECONDS = 30.0  # a deliberate look holds its pose this long
 IDLE_ACK_SECONDS = 0.5         # wait this long for the firmware's idle_ack
+# Personality knobs. Ranges match the servo calibrator, which the firmware
+# also enforces. Calm and Lively are the laboratory presets. Curious starts
+# at the preferred desk settings (1.2×, 0.85×, 2500–5500 ms).
+IDLE_SCALE_RANGE = (0.3, 1.5)
+IDLE_DURATION_RANGE = (0.4, 2.0)
+IDLE_PAUSE_RANGE = (200, 30000)  # milliseconds, min <= max
+IDLE_PRESETS = {
+    "calm": {"scale": 0.70, "duration": 1.30, "pause_min": 3500, "pause_max": 8000},
+    "curious": {"scale": 1.20, "duration": 0.85, "pause_min": 2500, "pause_max": 5500},
+    "lively": {"scale": 1.10, "duration": 0.80, "pause_min": 1200, "pause_max": 3500},
+}
 # Idle reasons, glance/ack/claim, and tracking pose updates. Off by default.
 # Set True to turn the log back on. It does not change motion.
 IDLE_DEBUG = False

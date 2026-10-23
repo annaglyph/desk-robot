@@ -13,6 +13,7 @@ The rest of the frame is the payload.
 {"type": "hello", "who": "desk-robot", "fw": "0.3.0", "token": "..."}  // must be the first message; token = ROBOT_TOKEN
 {"type": "state", "pan": 12.5, "tilt": 0.0, "idle": false, "emotion": "neutral"}  // every ~5 s. idle is the switch (enabled), not the gate
 {"type": "idle_ack", "id": 1, "idle": false, "pan": 12.5, "tilt": 0.0}  // reply to a glance that carried an id; pan/tilt are current angles
+{"type": "idle_style_ack", "id": 4, "ok": true, "preset": "curious", "scale": 0.9, "duration": 0.85, "pause_min": 2500, "pause_max": 5500}  // reply to idle_style; numbers are what is now in effect. ok false leaves them unchanged
 {"type": "temp", "c": 52.0}       // chip temperature, sent every ~10 s
 {"type": "speak_done"}            // finished playing the last reply
 ```
@@ -35,9 +36,19 @@ the latest frame for the live-view page, the face tracker, and the language mode
 {"type": "volume", "level": 0.4}  // speaker volume 0.0-1.0
 {"type": "asleep", "on": true}    // eyes shut + Z's; false = wake up. Asleep = no idle glances.
 {"type": "glance", "on": false, "id": 1}  // idle switch. id is optional; with an id the robot replies idle_ack after applying it
+{"type": "idle_style", "id": 1, "read": true}  // ask for the active personality. Does not turn idle on or move the head
+{"type": "idle_style", "id": 2, "preset": "curious"}  // load that personality's firmware defaults
+{"type": "idle_style", "id": 3, "preset": "curious", "scale": 1.2, "duration": 0.85, "pause_min": 2500, "pause_max": 5500}  // one atomic set
+{"type": "idle_style", "id": 4, "scale": 0.9}  // or "duration", or "pause_min"+"pause_max". Rejected values are not applied
 {"type": "mic", "on": true}       // stream the microphone to the server
 {"type": "stream", "on": true, "fps": 10}   // start/stop the camera stream, set rate
 ```
+
+`idle_style` selects a personality or changes its knobs. It does not enable
+idle and does not move the servos. The firmware rejects a scale outside
+`0.3–1.5`, a duration outside `0.4–2`, or a pause outside `200–30000` ms
+(minimum above maximum included) and answers `ok: false` with the previous
+numbers. The live view updates from that reply.
 
 The server sends `stream on` at `CAMERA_FPS` when the robot connects. The
 live view is served by `server/brain/eyes.py` at http://localhost:8766/.

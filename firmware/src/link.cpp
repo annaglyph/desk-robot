@@ -407,6 +407,25 @@ void Link::sendState(float panDeg, float tiltDeg, bool idle, const char* emotion
   sendJson(out);
 }
 
+void Link::sendIdleStyleAck(uint32_t id, bool ok, const char* preset, float scale,
+                              float duration, uint32_t pauseMin, uint32_t pauseMax,
+                              const char* error) {
+  if (!connected()) return;
+  JsonDocument doc;
+  doc["type"] = "idle_style_ack";
+  doc["id"] = id;
+  doc["ok"] = ok;
+  doc["preset"] = preset;
+  doc["scale"] = scale;
+  doc["duration"] = duration;
+  doc["pause_min"] = pauseMin;
+  doc["pause_max"] = pauseMax;
+  if (error != nullptr && error[0] != '\0') doc["error"] = error;
+  String out;
+  serializeJson(doc, out);
+  sendJson(out);
+}
+
 void Link::sendIdleAck(uint32_t id, bool idle, float panDeg, float tiltDeg) {
   if (!connected()) return;
   JsonDocument doc;
@@ -504,6 +523,31 @@ void Link::handleMessage(const char* json) {
     cmd = String("volume ") + String(doc["level"] | 0.5f, 2);
   } else if (!strcmp(type, "mic")) {
     cmd = String("mic ") + ((doc["on"] | false) ? "on" : "off");
+  } else if (!strcmp(type, "idle_style")) {
+    // Personality and knobs only. This never turns idle on or off.
+    // An id is answered with idle_style_ack after the command runs.
+    if (doc["read"] | false) {
+      cmd = "idle read";
+    } else if (doc["preset"].is<const char*>() && !doc["scale"].isNull()) {
+      cmd = String("idle set ") + doc["preset"].as<const char*>() + " " +
+            String(doc["scale"].as<float>(), 2) + " " +
+            String(doc["duration"].as<float>(), 2) + " " +
+            String(doc["pause_min"].as<long>()) + " " +
+            String(doc["pause_max"].as<long>());
+    } else if (doc["preset"].is<const char*>()) {
+      cmd = String("idle ") + doc["preset"].as<const char*>();
+    } else if (!doc["scale"].isNull()) {
+      cmd = String("idle scale ") + String(doc["scale"].as<float>(), 2);
+    } else if (!doc["duration"].isNull()) {
+      cmd = String("idle duration ") + String(doc["duration"].as<float>(), 2);
+    } else if (!doc["pause_min"].isNull() && !doc["pause_max"].isNull()) {
+      cmd = String("idle pause ") + String(doc["pause_min"].as<long>()) + " " +
+            String(doc["pause_max"].as<long>());
+    } else {
+      Serial.println(F("brain: idle_style needs read, a preset, scale, duration, or pause"));
+      return;
+    }
+    if (doc["id"].is<uint32_t>()) cmd += " " + String(doc["id"].as<uint32_t>());
   } else if (!strcmp(type, "glance")) {
     // The id rides through the command queue, so the reply follows the
     // glance and every command queued before it.

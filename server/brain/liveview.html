@@ -145,6 +145,7 @@
   .tune .name b { font-weight: 500; }
   .tune .name small { color: var(--muted); }
   .tune .v { font: 13px var(--mono); color: var(--amber); text-align: right; }
+  .idle-fields .field { grid-template-columns: 64px 1fr 72px; }
 
   @media (prefers-reduced-motion: reduce) { .viewport, .horizon, .meridian, button, h1 .dot { transition: none; } }
 </style>
@@ -193,6 +194,22 @@
           <button data-act="center">Center and relax</button>
           <button id="trackbtn" data-act="track">Follow my face</button>
         </div>
+      </div>
+      <div class="card">
+        <h2 class="label"><span>Idle personality</span><span class="sub" id="idlenote"></span></h2>
+        <div class="row" id="idlepresets">
+          <button type="button" data-preset="calm">Calm</button>
+          <button type="button" data-preset="curious">Curious</button>
+          <button type="button" data-preset="lively">Lively</button>
+          <button type="button" id="idlereset">Reset to defaults</button>
+        </div>
+        <div class="idle-fields">
+          <div class="field"><span class="k">Amp</span><input type="range" id="idlescale" min="0.3" max="1.5" step="0.05" value="1.2" aria-label="amplitude multiplier"><span class="v" id="idlescalev">1.20×</span></div>
+          <div class="field"><span class="k">Time</span><input type="range" id="idledur" min="0.4" max="2" step="0.05" value="0.85" aria-label="duration multiplier"><span class="v" id="idledurv">0.85×</span></div>
+          <div class="field"><span class="k">Min</span><input type="range" id="idlepmin" min="200" max="30000" step="100" value="2500" aria-label="minimum pause between gestures"><span class="v" id="idlepminv">2500 ms</span></div>
+          <div class="field"><span class="k">Max</span><input type="range" id="idlepmax" min="200" max="30000" step="100" value="5500" aria-label="maximum pause between gestures"><span class="v" id="idlepmaxv">5500 ms</span></div>
+        </div>
+        <p class="hint">Amplitude, gesture time, and the pause before the next gesture. Numbers update when the robot confirms them. Idle still starts and stops on its own.</p>
       </div>
       <div class="card face-card">
         <h2 class="label"><span>Face</span></h2>
@@ -631,6 +648,80 @@
   $("trackbtn").onclick = () => act("track", { on: !status.tracking_enabled });
   $("sayform").onsubmit = ev => { ev.preventDefault(); const t = $("saytext").value.trim(); if (t) { act("say", { text: t }, "Saying it"); $("saytext").value = ""; } };
   document.querySelector('[data-act=ask]').onclick = () => { const t = $("saytext").value.trim(); if (t) { act("ask", { text: t }, "Asked " + NAME); $("saytext").value = ""; } };
+  let idlePending = false;
+  function applyIdleStatus(idle) {
+    const confirmed = !!idle.confirmed;
+    const persona = idle.personality || "";
+    const personaLabel = persona ? persona.charAt(0).toUpperCase() + persona.slice(1) : "";
+    const idleState = idle.on ? "playing" : (idle.reason && idle.reason !== "idle" ? idle.reason : "when quiet");
+    $("idlenote").textContent = confirmed
+      ? personaLabel + (idle.adjusted ? " · adjusted" : "") + " · " + idleState
+      : "waiting for the robot";
+    for (const b of document.querySelectorAll("#idlepresets button")) b.disabled = !confirmed;
+    $("idlereset").disabled = !confirmed;
+    for (const id of ["idlescale", "idledur", "idlepmin", "idlepmax"]) $(id).disabled = !confirmed;
+    for (const b of document.querySelectorAll("#idlepresets button[data-preset]")) {
+      b.classList.toggle("active", confirmed && b.dataset.preset === persona);
+    }
+    if (!confirmed || idlePending) return;
+    if (!dragging.has("idlescale") && idle.scale != null) {
+      $("idlescale").value = idle.scale;
+      $("idlescalev").textContent = (+idle.scale).toFixed(2) + "×";
+    }
+    if (!dragging.has("idledur") && idle.duration != null) {
+      $("idledur").value = idle.duration;
+      $("idledurv").textContent = (+idle.duration).toFixed(2) + "×";
+    }
+    if (!dragging.has("idlepmin") && idle.pause_min != null) {
+      $("idlepmin").value = idle.pause_min;
+      $("idlepminv").textContent = Math.round(idle.pause_min) + " ms";
+    }
+    if (!dragging.has("idlepmax") && idle.pause_max != null) {
+      $("idlepmax").value = idle.pause_max;
+      $("idlepmaxv").textContent = Math.round(idle.pause_max) + " ms";
+    }
+  }
+  async function idleAct(body) {
+    idlePending = true;
+    try {
+      const reply = await api("idle_style", body);
+      idlePending = false;
+      if (reply.idle) applyIdleStatus(reply.idle);
+    } catch (e) {
+      idlePending = false;
+      toast(e.message, true);
+    }
+  }
+  for (const b of document.querySelectorAll("#idlepresets button[data-preset]")) {
+    b.onclick = () => idleAct({ name: b.dataset.preset });
+  }
+  $("idlereset").onclick = () => idleAct({ reset: true });
+  function showIdle(id, text) { $(id).textContent = text; }
+  $("idlescale").addEventListener("input", () => {
+    dragging.add("idlescale");
+    showIdle("idlescalev", (+$("idlescale").value).toFixed(2) + "×");
+  });
+  $("idledur").addEventListener("input", () => {
+    dragging.add("idledur");
+    showIdle("idledurv", (+$("idledur").value).toFixed(2) + "×");
+  });
+  function holdPause(which) {
+    dragging.add("idlepmin"); dragging.add("idlepmax");
+    if (which === "min" && +$("idlepmin").value > +$("idlepmax").value) $("idlepmax").value = $("idlepmin").value;
+    if (which === "max" && +$("idlepmax").value < +$("idlepmin").value) $("idlepmin").value = $("idlepmax").value;
+    showIdle("idlepminv", Math.round(+$("idlepmin").value) + " ms");
+    showIdle("idlepmaxv", Math.round(+$("idlepmax").value) + " ms");
+  }
+  $("idlepmin").addEventListener("input", () => holdPause("min"));
+  $("idlepmax").addEventListener("input", () => holdPause("max"));
+  $("idlescale").addEventListener("change", () => { dragging.delete("idlescale"); idleAct({ scale: +$("idlescale").value }); });
+  $("idledur").addEventListener("change", () => { dragging.delete("idledur"); idleAct({ duration: +$("idledur").value }); });
+  function sendPause() {
+    dragging.delete("idlepmin"); dragging.delete("idlepmax");
+    idleAct({ pause_min: +$("idlepmin").value, pause_max: +$("idlepmax").value });
+  }
+  $("idlepmin").addEventListener("change", sendPause);
+  $("idlepmax").addEventListener("change", sendPause);
   document.querySelector('[data-act=wake]').onclick = () => act("sleep", { on: false }, NAME + " is awake");
   document.querySelector('[data-act=sleep]').onclick = () => act("sleep", { on: true }, NAME + " is asleep");
 
@@ -710,6 +801,7 @@
       if (!dragging.has("tilt")) { $("tilt").value = Math.round(tilt); $("tiltv").textContent = Math.round(tilt) + "°"; }
       if (s.volume != null && document.activeElement !== $("vol")) { $("vol").value = s.volume; $("volv").textContent = (+s.volume).toFixed(2); }
       for (const b of faces.children) b.classList.toggle("active", b.dataset.emotion === s.emotion);
+      applyIdleStatus(s.idle || {});
       $("trackbtn").classList.toggle("active", !!s.tracking_enabled);
       $("trackbtn").textContent = s.tracking_enabled ? "Stop following" : "Follow my face";
       $("heard").textContent = s.last_heard || ""; $("said").textContent = s.last_said || "";
