@@ -37,6 +37,8 @@ class ServoNeck {
  private:
   void writeAngle(float deg);
   void attachIfNeeded();
+  void rewriteAttached();
+  void reportTimerWidthOnce();
 
   Servo servo_;
   uint8_t pin_ = 0;
