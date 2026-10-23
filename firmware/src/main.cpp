@@ -92,11 +92,11 @@ void printHelp() {
   Serial.println(F("  blink        blink now"));
   Serial.println(F("  sleep on|off eyes shut, breathing, Z's"));
   Serial.println(F("  demo on|off  idle life: auto blinks and emotion changes"));
-  Serial.println(F("  glance on|off  same switch as idle on|off"));
+  Serial.println(F("  glance on|off [id]  same switch as idle on|off; an id replies idle_ack"));
   Serial.println(F("  idle on|off  curious head motion while awake and connected"));
   Serial.println(F("  idle calm|curious|lively   preset only; idle on to run it"));
   Serial.println(F("  idle status"));
-  Serial.println(F("  Leave face tracking off while idle is on. A still face sends no pan/tilt."));
+  Serial.println(F("  The brain switches idle itself; typing idle on here is for tests only."));
   Serial.println(F("  volume <0-1> speaker volume"));
   Serial.println(F("  beep         play a test tone through the speaker"));
   Serial.println(F("  mic on|off   stream the microphone to the brain"));
@@ -240,9 +240,26 @@ void handleCommand(String line, uint32_t ageMs = 0) {
   } else if (cmd == "temp") {
     Serial.printf("chip %.1f C\n", temperatureRead());
   } else if (cmd == "glance") {
-    idleMotion.setEnabled(arg == "on");
+    // glance on|off [id]. With an id, reply idle_ack after the cancel, so the
+    // brain reads the pose the head actually holds.
+    int sp = arg.indexOf(' ');
+    String onoff = sp < 0 ? arg : arg.substring(0, sp);
+    idleMotion.setEnabled(onoff == "on");
     applyIdleGate();
     Serial.printf("glance %s\n", idleMotion.enabled() ? "on" : "off");
+#if HAVE_BRAIN
+    if (sp >= 0) {
+      uint32_t id = static_cast<uint32_t>(strtoul(arg.substring(sp + 1).c_str(), nullptr, 10));
+      // current() is where the neck is. target() can still be a tracking or
+      // look destination; cancelTrajectory only stops an idle curve.
+      Serial.printf("idle_ack id %lu idle %d pan %.1f tilt %.1f (target %.1f/%.1f)\n",
+                    static_cast<unsigned long>(id), idleMotion.enabled() ? 1 : 0,
+                    panNeck.current(), tiltNeck.current(), panNeck.target(),
+                    tiltNeck.target());
+      brainLink.sendIdleAck(id, idleMotion.enabled(), panNeck.current(),
+                            tiltNeck.current());
+    }
+#endif
   } else if (cmd == "idle") {
     String which = arg;
     which.toLowerCase();
@@ -403,7 +420,8 @@ void loop() {
   }
   if (brainLink.connected() && now >= nextStateMs) {
     nextStateMs = now + 5000;
-    brainLink.sendState(panNeck.current(), emotionName(face.emotion()));
+    brainLink.sendState(panNeck.current(), tiltNeck.current(), idleMotion.enabled(),
+                        emotionName(face.emotion()));
   }
 #endif
 

@@ -7,8 +7,9 @@ proposed head pose goes into an outbox; main.py sends it to the robot.
 
 The camera rides on the head, so this is a simple servo loop: an error of
 x% of the half-width means the face is x% of half the field of view off
-axis. We move a fraction (TRACK_GAIN) of that per frame so the head glides
-rather than jerks, and ignore tiny errors (TRACK_DEADBAND).
+axis. We move a fraction (TRACK_GAIN) of that when a command is sent, not
+on every camera frame, so a delayed JPEG cannot stack the same offset.
+Tiny errors (TRACK_DEADBAND) are ignored.
 
 A Mac webcam standing in for the robot does not ride on the head, so those
 frames are drawn on (the box in the live view) and never turned into pan
@@ -30,15 +31,27 @@ from .eyes import Eyes
 
 MODEL = Path(__file__).resolve().parent.parent / "models" / "face_detection_yunet_2023mar.onnx"
 
+# One line per sent command: frame age, face error, correction, commanded
+# angle. Off by default. Set True to turn the log back on. Not the idle log.
+TRACK_DEBUG = False
+SEND_INTERVAL = 0.12
+
 
 class Tracker:
-    def __init__(self, eyes: Eyes, on_pose: Callable[[float | None, float | None, bool], None]) -> None:
-        """on_pose(pan, tilt, tracking) is called from the tracker thread
-        whenever the head should move (None = leave that axis alone)."""
+    def __init__(
+        self, eyes: Eyes, on_pose: Callable[[float | None, float | None, bool, int], None],
+    ) -> None:
+        """on_pose(pan, tilt, tracking, pose_gen) is called from the tracker
+        thread whenever the head should move (None = leave that axis alone).
+        pose_gen is the note_pose count the move was worked out from."""
         self.eyes = eyes
         self.on_pose = on_pose
         self.pan = 0.0     # our estimate of where the head is (deg)
         self.tilt = 0.0
+        # note_pose runs on the event loop and _steer on this thread. The lock
+        # keeps a steer from writing back a sum made from the old pose.
+        self._pose_lock = threading.Lock()
+        self.pose_gen = 0
         self.tracking = False
         self.face: tuple[int, int, int, int] | None = None  # x, y, w, h in the frame
         self.last_seen = 0.0
@@ -52,11 +65,14 @@ class Tracker:
         threading.Thread(target=self._run, daemon=True).start()
 
     # Called from main.py when it moves the head itself, so we stay in sync.
+    # A move already queued from the old pose then carries a stale pose_gen.
     def note_pose(self, pan: float | None = None, tilt: float | None = None) -> None:
-        if pan is not None:
-            self.pan = pan
-        if tilt is not None:
-            self.tilt = tilt
+        with self._pose_lock:
+            if pan is not None:
+                self.pan = pan
+            if tilt is not None:
+                self.tilt = tilt
+            self.pose_gen += 1
 
     def _detector(self, w: int, h: int):
         if self._det is None or self._size != (w, h):
@@ -94,11 +110,11 @@ class Tracker:
                     self._lost_reported = False
                     self._steer(face, w, h, now)
                 elif self.tracking and now - self.last_seen > config.TRACK_LOST_SECONDS:
-                    # Lost them: hand the head back to its idle glances.
+                    # Lost them. Idle may resume after the quiet period.
                     self.tracking = False
                     if not self._lost_reported:
                         self._lost_reported = True
-                        self.on_pose(None, None, False)
+                        self.on_pose(None, None, False, self.pose_gen)
 
             self.eyes.publish(self._annotate(img, face, w, h))
 
@@ -106,21 +122,31 @@ class Tracker:
         x, y, fw, fh = face
         ex = ((x + fw / 2) - w / 2) / (w / 2)   # -1 (left edge) .. +1 (right edge)
         ey = ((y + fh / 2) - h / 2) / (h / 2)   # -1 (top) .. +1 (bottom)
-        moved = False
-        if abs(ex) > config.TRACK_DEADBAND:
-            self.pan += config.TRACK_PAN_SIGN * ex * (config.TRACK_HFOV / 2) * config.TRACK_GAIN
-            self.pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, self.pan))
-            moved = True
-        if abs(ey) > config.TRACK_DEADBAND:
-            # Face above center → look up (tilt toward its max); below → look down.
-            self.tilt += config.TRACK_TILT_SIGN * (-ey) * (config.TRACK_VFOV / 2) * config.TRACK_GAIN
-            self.tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, self.tilt))
-            moved = True
         became_tracking = not self.tracking
         self.tracking = True
-        if (moved or became_tracking) and now - self._last_sent > 0.12:
-            self._last_sent = now
-            self.on_pose(round(self.pan, 1), round(self.tilt, 1), True)
+        due = now - self._last_sent > SEND_INTERVAL
+        if not due:
+            return
+        dpan = dtilt = 0.0
+        with self._pose_lock:
+            if abs(ex) > config.TRACK_DEADBAND:
+                dpan = config.TRACK_PAN_SIGN * ex * (config.TRACK_HFOV / 2) * config.TRACK_GAIN
+                self.pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, self.pan + dpan))
+            if abs(ey) > config.TRACK_DEADBAND:
+                # Face above center → look up (tilt toward its max); below → look down.
+                dtilt = config.TRACK_TILT_SIGN * (-ey) * (config.TRACK_VFOV / 2) * config.TRACK_GAIN
+                self.tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, self.tilt + dtilt))
+            pan, tilt, gen = self.pan, self.tilt, self.pose_gen
+        if dpan == 0.0 and dtilt == 0.0 and not became_tracking:
+            return
+        self._last_sent = now
+        if TRACK_DEBUG:
+            age = (now - self.eyes.frame_at) if self.eyes.frame_at else 0.0
+            print(
+                f"(track: age={age:.2f}s ex={ex:+.2f} ey={ey:+.2f} "
+                f"dpan={dpan:+.1f} dtilt={dtilt:+.1f} → pan={pan:.1f} tilt={tilt:.1f})"
+            )
+        self.on_pose(round(pan, 1), round(tilt, 1), True, gen)
 
     def _annotate(self, img, face, w: int, h: int) -> bytes:
         cv2.drawMarker(img, (w // 2, h // 2), (90, 90, 90), cv2.MARKER_CROSS, 12, 1)

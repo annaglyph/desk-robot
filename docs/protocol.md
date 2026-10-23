@@ -11,7 +11,8 @@ The rest of the frame is the payload.
 
 ```json
 {"type": "hello", "who": "desk-robot", "fw": "0.3.0", "token": "..."}  // must be the first message; token = ROBOT_TOKEN
-{"type": "state", "pan": 12.5, "emotion": "neutral"}
+{"type": "state", "pan": 12.5, "tilt": 0.0, "idle": false, "emotion": "neutral"}  // every ~5 s. idle is the switch (enabled), not the gate
+{"type": "idle_ack", "id": 1, "idle": false, "pan": 12.5, "tilt": 0.0}  // reply to a glance that carried an id; pan/tilt are current angles
 {"type": "temp", "c": 52.0}       // chip temperature, sent every ~10 s
 {"type": "speak_done"}            // finished playing the last reply
 ```
@@ -33,7 +34,7 @@ the latest frame for the live-view page, the face tracker, and the language mode
 {"type": "speak_end"}             // no more audio; robot replies speak_done when played out
 {"type": "volume", "level": 0.4}  // speaker volume 0.0-1.0
 {"type": "asleep", "on": true}    // eyes shut + Z's; false = wake up. Asleep = no idle glances.
-{"type": "glance", "on": false}   // allow/forbid the firmware's idle head glances; the server sends off on connect and leaves them off
+{"type": "glance", "on": false, "id": 1}  // idle switch. id is optional; with an id the robot replies idle_ack after applying it
 {"type": "mic", "on": true}       // stream the microphone to the server
 {"type": "stream", "on": true, "fps": 10}   // start/stop the camera stream, set rate
 ```

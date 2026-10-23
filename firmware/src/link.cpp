@@ -394,12 +394,27 @@ bool Link::sendBinary(uint8_t type, const uint8_t* data, size_t len) {
   return ws_.sendBIN(buf, len + 1);
 }
 
-void Link::sendState(float panDeg, const char* emotion) {
+void Link::sendState(float panDeg, float tiltDeg, bool idle, const char* emotion) {
   if (!connected()) return;
   JsonDocument doc;
   doc["type"] = "state";
   doc["pan"] = panDeg;
+  doc["tilt"] = tiltDeg;
+  doc["idle"] = idle;
   doc["emotion"] = emotion;
+  String out;
+  serializeJson(doc, out);
+  sendJson(out);
+}
+
+void Link::sendIdleAck(uint32_t id, bool idle, float panDeg, float tiltDeg) {
+  if (!connected()) return;
+  JsonDocument doc;
+  doc["type"] = "idle_ack";
+  doc["id"] = id;
+  doc["idle"] = idle;
+  doc["pan"] = panDeg;
+  doc["tilt"] = tiltDeg;
   String out;
   serializeJson(doc, out);
   sendJson(out);
@@ -490,7 +505,10 @@ void Link::handleMessage(const char* json) {
   } else if (!strcmp(type, "mic")) {
     cmd = String("mic ") + ((doc["on"] | false) ? "on" : "off");
   } else if (!strcmp(type, "glance")) {
+    // The id rides through the command queue, so the reply follows the
+    // glance and every command queued before it.
     cmd = String("glance ") + ((doc["on"] | true) ? "on" : "off");
+    if (doc["id"].is<uint32_t>()) cmd += " " + String(doc["id"].as<uint32_t>());
   } else if (!strcmp(type, "asleep")) {
     cmd = String("sleep ") + ((doc["on"] | false) ? "on" : "off");
   } else if (!strcmp(type, "stream")) {

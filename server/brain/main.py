@@ -32,6 +32,7 @@ Console commands:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import queue
@@ -48,6 +49,7 @@ from .tcp_probe import SpeechSendTrace, read_send_path, tcp_trace_enabled
 from .thinking import Interrupted, RobotBrain, build_tools
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
+from .idle import IdleController, IdleInputs
 from .tracker import Tracker
 from .webcam import MacCamera
 
@@ -61,8 +63,22 @@ awake_until = 0.0  # while time.time() < this, he's awake: no wake word needed
 robot_speak_done = asyncio.Event()  # robot finished playing the last reply
 eyes = Eyes()
 mac_camera = MacCamera(eyes)
-head_moves: asyncio.Queue[tuple[float | None, float | None, bool]] = asyncio.Queue()
+# (pan, tilt, tracking, pose_gen) from the tracker thread
+head_moves: asyncio.Queue[tuple[float | None, float | None, bool, int]] = asyncio.Queue()
 tracker: Tracker | None = None
+
+# Head ownership. The firmware runs idle motion; the brain switches it with
+# `glance` and keeps the only lock on head commands. idle_sent is the last
+# glance this connection sent (None = unknown, as on connect). pose_synced
+# means tracker.pan/tilt came from the firmware's idle_ack since idle last ran.
+idle_sent: bool | None = None
+pose_synced = False
+idle_ctl = IdleController(config.IDLE_QUIET_SECONDS)
+head_held_until = 0.0  # time.monotonic(); a deliberate look holds its pose until then
+_head_lock_ref: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None
+_ack_seq = 0
+_ack_waiters: dict[int, asyncio.Future] = {}
+_ack_missing_warned = False
 
 FRAME_BYTES = 3200  # 100 ms of 16 kHz s16le per audio frame to the robot
 
@@ -224,8 +240,11 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         await send_to_robot({"type": "mic", "on": True})
     if eyes.source == "robot":
         await send_to_robot({"type": "stream", "on": True, "fps": config.CAMERA_FPS})
-    # No idle head glances: they fight deliberate looks. The eyes still move.
-    await send_to_robot({"type": "glance", "on": False})
+    # Idle starts off on every connection. The claim reads the pose the
+    # firmware kept, which may be an old idle pose or 0/0 after a reboot.
+    # It runs as a task because its idle_ack arrives through the loop below.
+    _reset_head_ownership()
+    asyncio.create_task(_claim_on_connect())
     try:
         async for message in websocket:
             if isinstance(message, bytes):
@@ -241,8 +260,15 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 continue
             if not isinstance(event, dict):
                 continue
+            if event.get("type") == "idle_ack":
+                _resolve_ack(event)
+                continue
             if event.get("type") == "state":
-                continue  # heartbeat every 5 s; not worth the console space
+                # Heartbeat every 5 s. Its pose is never used for steering:
+                # only an idle_ack is ordered after our own glance. It does
+                # catch idle switched on from the serial console.
+                _note_heartbeat(event)
+                continue
             if event.get("type") == "speak_done":
                 robot_speak_done.set()
                 continue
@@ -260,6 +286,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         # new connection can arrive before the old one is noticed as dead.
         if robot_socket is websocket:
             robot_socket = None
+            _reset_head_ownership()
             print("robot disconnected")
             pick_mic_source()
             pick_camera_source()
@@ -290,9 +317,11 @@ async def handle_console_line(line: str) -> bool:
     elif cmd in ("pan", "tilt"):
         try:
             deg = float(arg)
-            await send_to_robot({"type": cmd, "deg": deg})
-            if tracker is not None:
-                tracker.note_pose(**{cmd: deg})
+            await set_head_held(True)
+            async with claim_head():
+                await send_to_robot({"type": cmd, "deg": deg})
+                if tracker is not None:
+                    tracker.note_pose(**{cmd: deg})
         except ValueError:
             print(f"usage: {cmd} <degrees>")
     elif cmd == "track":
@@ -373,40 +402,42 @@ async def look(args: dict) -> tuple[str, bytes | None]:
         jpeg = eyes.latest()
         note = "The picture is from the computer's camera, which does not move. No head was turned."
         return (note + (" Fresh camera image attached." if jpeg else " No camera image available."), jpeg)
-    pan = tracker.pan if tracker else 0.0
-    tilt = tracker.tilt if tracker else 0.0
-    move_pan = move_tilt = False
     d = args.get("direction")
     try:
         amount = float(args["degrees"]) if args.get("degrees") is not None else None
     except (TypeError, ValueError):
         amount = None
-    if d in ("left", "right"):
-        deg = amount if amount is not None else 40.0
-        pan, move_pan = (-deg if d == "left" else deg), True
-    elif d == "down":
-        tilt, move_tilt = -(amount if amount is not None else 30.0), True  # a normal glance down; ask for degrees to go further
-    elif d == "up":
-        tilt, move_tilt = (amount if amount is not None else config.TRACK_TILT_MAX), True
-    elif d == "level":
-        tilt, move_tilt = 0.0, True  # eye level, not the top of the travel
-    elif d == "center":
-        pan, tilt, move_pan, move_tilt = 0.0, 0.0, True, True
-    if not (move_pan or move_tilt):
+    if d not in ("left", "right", "down", "up", "level", "center"):
         return ("Say where to look: left, right, down, level, or center.", None)
-    pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, pan))
-    tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, tilt))
 
     if tracker is not None and tracker.enabled:
         await set_tracking(False, announce=False)  # tracking would drag the head back
     await set_head_held(d != "center")
-    seen = eyes.frame_seq  # the picture from before this move is commanded
-    if move_pan:
-        await send_to_robot({"type": "pan", "deg": pan})
-    if move_tilt:
-        await send_to_robot({"type": "tilt", "deg": tilt})
-    if tracker is not None:
-        tracker.note_pose(pan=pan if move_pan else None, tilt=tilt if move_tilt else None)
+    async with claim_head():
+        # Read only after the claim: an idle gesture may have moved the head.
+        pan = tracker.pan if tracker else 0.0
+        tilt = tracker.tilt if tracker else 0.0
+        move_pan = move_tilt = False
+        if d in ("left", "right"):
+            deg = amount if amount is not None else 40.0
+            pan, move_pan = (-deg if d == "left" else deg), True
+        elif d == "down":
+            tilt, move_tilt = -(amount if amount is not None else 30.0), True  # a normal glance down; ask for degrees to go further
+        elif d == "up":
+            tilt, move_tilt = (amount if amount is not None else config.TRACK_TILT_MAX), True
+        elif d == "level":
+            tilt, move_tilt = 0.0, True  # eye level, not the top of the travel
+        else:
+            pan, tilt, move_pan, move_tilt = 0.0, 0.0, True, True
+        pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, pan))
+        tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, tilt))
+        seen = eyes.frame_seq  # the picture from before this move is commanded
+        if move_pan:
+            await send_to_robot({"type": "pan", "deg": pan})
+        if move_tilt:
+            await send_to_robot({"type": "tilt", "deg": tilt})
+        if tracker is not None:
+            tracker.note_pose(pan=pan if move_pan else None, tilt=tilt if move_tilt else None)
     await _wait_for_look_frame(seen)
     note, jpeg = _look_image(seen)
     pan_word = "left" if pan < -5 else "right" if pan > 5 else "center"
@@ -422,21 +453,234 @@ async def look(args: dict) -> tuple[str, bytes | None]:
     return (where + note, jpeg)
 
 
-head_held = False  # he was told to look somewhere and is holding that pose
-
-
 async def set_head_held(held: bool) -> None:
-    """Remember that a deliberate look is in effect (shown on the console).
-    Idle glances are always off, so nothing else needs to move."""
-    global head_held
-    head_held = held
+    """A deliberate head command. held=True holds its pose against idle for
+    IDLE_LOOK_HOLD_SECONDS; held=False (center, sleep) ends any hold. Either
+    way idle waits a full quiet period before it starts again."""
+    global head_held_until
+    now = time.monotonic()
+    head_held_until = now + config.IDLE_LOOK_HOLD_SECONDS if held else 0.0
+    idle_ctl.note_activity(now)
+
+
+# ── Head ownership: claim_head and idle switching ────────────────────────────
+
+IDLE_POLL_SECONDS = 0.2
+_ack_retry_at = 0.0  # after an idle_ack timeout, don't stall every move on another
+
+
+def _head_lock() -> asyncio.Lock:
+    """One lock per event loop (tests run several loops in one process)."""
+    global _head_lock_ref
+    loop = asyncio.get_running_loop()
+    if _head_lock_ref is None or _head_lock_ref[0] is not loop:
+        _head_lock_ref = (loop, asyncio.Lock())
+    return _head_lock_ref[1]
+
+
+def _reset_head_ownership() -> None:
+    """A new or lost connection: nothing is known about idle or the pose.
+    A claim still waiting for an ack gets None and gives up."""
+    global idle_sent, pose_synced, _ack_retry_at
+    idle_sent = None
+    pose_synced = False
+    _ack_retry_at = 0.0
+    for fut in list(_ack_waiters.values()):
+        if not fut.done():
+            fut.set_result(None)
+    _ack_waiters.clear()
+
+
+def _idle_debug(msg: str) -> None:
+    if config.IDLE_DEBUG:
+        print(f"(idle-debug: {msg})")
+
+
+def _resolve_ack(event: dict) -> None:
+    """Only the id we are waiting for counts. A late ack after a timeout, or
+    one from before a reconnect, finds no waiter and is dropped."""
+    _idle_debug(
+        f"ack id={event.get('id')} idle={event.get('idle')} "
+        f"pan={event.get('pan')} tilt={event.get('tilt')}"
+    )
+    fut = _ack_waiters.get(event.get("id"))
+    if fut is None:
+        _idle_debug(f"ack id={event.get('id')} ignored (no waiter)")
+        return
+    if not fut.done():
+        fut.set_result(event)
+
+
+def _note_heartbeat(event: dict) -> None:
+    """Idle on while we believe it off means someone typed `idle on` on the
+    robot's serial console. Claim again before the next move."""
+    global idle_sent, pose_synced
+    if event.get("idle") is True and idle_sent is False:
+        _idle_debug(
+            f"heartbeat idle=on while brain thought off "
+            f"pan={event.get('pan')} tilt={event.get('tilt')} — will reclaim"
+        )
+        idle_sent = None
+        pose_synced = False
+
+
+async def _send_glance_off() -> dict | None:
+    """glance off with a fresh id. Returns the matching idle_ack, or None on
+    timeout or disconnect."""
+    global _ack_seq
+    if robot_socket is None:
+        return None
+    _ack_seq += 1
+    rid = _ack_seq
+    fut = asyncio.get_running_loop().create_future()
+    _ack_waiters[rid] = fut
+    _idle_debug(f"claim glance off id={rid} sent={idle_sent} synced={pose_synced}")
+    try:
+        if not await send_to_robot({"type": "glance", "on": False, "id": rid}):
+            return None
+        return await asyncio.wait_for(fut, config.IDLE_ACK_SECONDS)
+    except (asyncio.TimeoutError, websockets.ConnectionClosed):
+        _idle_debug(f"ack timeout id={rid}")
+        return None
+    finally:
+        _ack_waiters.pop(rid, None)
+
+
+async def _sync_head() -> bool:
+    """With the head lock held: idle off, and tracker.pan/tilt taken from the
+    firmware's own pose when we still needed a glance. True when the pose is
+    the firmware's. Once idle is known off we do not glance again, even if
+    the last ack never arrived — that failed ack must not be retried as a
+    sync, and must not be treated as success."""
+    global idle_sent, pose_synced, _ack_retry_at
+    if robot_socket is None:
+        return False
+    if idle_sent is False:
+        return pose_synced
+    _idle_debug(
+        f"sync needed sent={idle_sent} synced={pose_synced} "
+        f"est pan={getattr(tracker, 'pan', None)} tilt={getattr(tracker, 'tilt', None)}"
+    )
+    socket_now = robot_socket
+    ack = await _send_glance_off()
+    if robot_socket is not socket_now:
+        return False  # that connection is gone; the next one claims for itself
+    # The firmware applies commands in order, so idle is off even without the ack.
+    idle_sent = False
+    try:
+        pan, tilt = float(ack["pan"]), float(ack["tilt"])
+    except (KeyError, TypeError, ValueError):
+        pose_synced = False
+        print("(head: no idle_ack from the robot — moving from the brain's own pose estimate)")
+        return False
+    if tracker is not None:
+        _idle_debug(
+            f"note_pose from ack pan={pan} tilt={tilt} "
+            f"(was {tracker.pan:.1f},{tracker.tilt:.1f} gen={tracker.pose_gen})"
+        )
+        tracker.note_pose(pan=pan, tilt=tilt)
+    pose_synced = True
+    _ack_retry_at = 0.0
+    return True
+
+
+@contextlib.asynccontextmanager
+async def claim_head():
+    """Take the head from idle, once. On entry idle is off. If a glance was
+    needed, tracker.pan/tilt now match the firmware; a move queued from the
+    old pose carries a stale pose_gen and is dropped. Steady tracking sends
+    do not use this — they go out the Stage 1 path after ownership is set."""
+    async with _head_lock():
+        await _sync_head()
+        yield
+
+
+async def _claim_on_connect() -> None:
+    async with claim_head():
+        pass
+
+
+async def _set_idle_on() -> None:
+    """Idle motion may start. No ack: the next claim sends glance off with an
+    id, and that reply is ordered after this."""
+    global idle_sent, pose_synced
+    async with _head_lock():
+        if robot_socket is None or idle_sent is True:
+            return
+        socket_now = robot_socket
+        _idle_debug("sending glance on")
+        if await send_to_robot({"type": "glance", "on": True}) and robot_socket is socket_now:
+            idle_sent = True
+            pose_synced = False  # the head moves on its own from here
+
+
+def idle_inputs(now: float) -> IdleInputs:
+    return IdleInputs(
+        connected=robot_socket is not None,
+        awake=staying_up(),
+        thinking=thinking,
+        speaking=ears is not None and ears.muted.is_set(),
+        hearing=ears is not None and ears.hearing,
+        tracking=tracker is not None and tracker.tracking,
+        tracking_enabled=tracker is not None and tracker.enabled,
+        held=now < head_held_until,
+    )
+
+
+def idle_reason() -> str:
+    if not config.IDLE_ENABLED:
+        return "disabled"
+    return idle_ctl.reason
+
+
+async def idle_loop() -> None:
+    """Switches the firmware's idle motion on after a quiet spell and off for
+    anything else. Only changes are sent. Idle motion does not touch the
+    awake clock."""
+    last_reason = None
+    last_status_at = 0.0
+    while True:
+        await asyncio.sleep(IDLE_POLL_SECONDS)
+        now = time.monotonic()
+        state = idle_inputs(now)
+        want = idle_ctl.wanted(now, state) and config.IDLE_ENABLED
+        reason = idle_reason()
+        if reason != last_reason or now - last_status_at >= 2.0:
+            last_reason = reason
+            last_status_at = now
+            awake_left = max(0.0, awake_until - time.time())
+            held_left = max(0.0, head_held_until - now)
+            _idle_debug(
+                f"want={want} reason={reason} sent={idle_sent} synced={pose_synced} "
+                f"awake={int(state.awake)} ({awake_left:.0f}s) hear={int(state.hearing)} "
+                f"think={int(state.thinking)} speak={int(state.speaking)} "
+                f"track={int(state.tracking)} enabled={int(state.tracking_enabled)} "
+                f"held={int(state.held)} ({held_left:.0f}s)"
+            )
+        if robot_socket is None:
+            continue
+        if want and idle_sent is not True:
+            print("(idle: on)")
+            await _set_idle_on()
+        elif not want and idle_sent is not False:
+            # Also catches idle_sent None: a heartbeat saw idle switched on
+            # from the robot's serial console.
+            if idle_sent is True:
+                print(f"(idle: off — {idle_reason()})")
+            async with claim_head():
+                pass
 
 
 async def set_tracking(on: bool, announce: bool = True) -> tuple[str, bytes | None]:
     if tracker is None:
         return ("no tracker running", None)
     tracker.enabled = on
-    if not on and tracker.tracking:
+    if on:
+        # Own the head before the first face, so idle cannot start a gesture.
+        idle_ctl.note_activity(time.monotonic())
+        async with claim_head():
+            pass
+    elif tracker.tracking:
         tracker.tracking = False
         eyes.tracking_info = {"tracking": False, "pan": tracker.pan, "tilt": tracker.tilt}
     if announce:
@@ -860,7 +1104,8 @@ def console_state() -> dict:
         "awake_for": max(0.0, awake_until - now),
         "emotion": current_emotion,
         "voice": {k: getattr(config, k) for k in VOICE_TUNABLE},
-        "head_held": head_held,
+        "head_held": time.monotonic() < head_held_until,
+        "idle": {"on": idle_sent is True, "reason": idle_reason()},
         "tracking_enabled": tracker.enabled if tracker is not None else False,
         "volume": speaker_volume,
         "tuning": {k: getattr(config, k) for k in TUNABLE},
@@ -897,16 +1142,18 @@ async def _console_command(action: str, payload: dict) -> dict:
         if tracker is not None and tracker.enabled:
             await set_tracking(False)
         await set_head_held(True)
-        await send_to_robot({"type": "pan", "deg": pan})
-        await send_to_robot({"type": "tilt", "deg": tilt})
-        if tracker is not None:
-            tracker.note_pose(pan=pan, tilt=tilt)
+        async with claim_head():
+            await send_to_robot({"type": "pan", "deg": pan})
+            await send_to_robot({"type": "tilt", "deg": tilt})
+            if tracker is not None:
+                tracker.note_pose(pan=pan, tilt=tilt)
     elif action == "center":
         await set_head_held(False)
-        await send_to_robot({"type": "pan", "deg": 0})
-        await send_to_robot({"type": "tilt", "deg": 0})
-        if tracker is not None:
-            tracker.note_pose(pan=0, tilt=0)
+        async with claim_head():
+            await send_to_robot({"type": "pan", "deg": 0})
+            await send_to_robot({"type": "tilt", "deg": 0})
+            if tracker is not None:
+                tracker.note_pose(pan=0, tilt=0)
     elif action == "volume":
         await set_volume(_number(payload, "level", 0.0, 1.0))
     elif action == "track":
@@ -1014,20 +1261,47 @@ def stop_listening() -> None:
     print("stopped listening")
 
 
+async def _send_track(pan: float | None, tilt: float | None, gen: int) -> None:
+    """Stage 1 path: send the pose. Drop it if a claim or look landed first."""
+    if tracker is not None and gen != tracker.pose_gen:
+        _idle_debug(
+            f"drop stale track pan={pan} tilt={tilt} gen={gen} "
+            f"now_gen={tracker.pose_gen} est=({tracker.pan:.1f},{tracker.tilt:.1f})"
+        )
+        return
+    _idle_debug(f"track send pan={pan} tilt={tilt} gen={gen}")
+    if pan is not None:
+        await send_to_robot({"type": "pan", "deg": pan})
+    if tilt is not None:
+        await send_to_robot({"type": "tilt", "deg": tilt})
+
+
 async def head_loop() -> None:
-    """Sends the tracker's head moves to the robot; pauses idle glances while
-    a face is being followed and resumes them when it's lost."""
+    """Sends the tracker's head moves the Stage 1 way. Claims only when
+    tracking begins or idle is not known off (reconnect, serial idle on).
+    tracker.enabled keeps idle off even before a face is found."""
     was_tracking = False
     while True:
-        pan, tilt, tracking = await head_moves.get()
+        pan, tilt, tracking, gen = await head_moves.get()
         if tracking != was_tracking:
-            print("tracking: face found — head follows" if tracking else "tracking: face lost — idle glances resume")
+            print("tracking: face found — head follows" if tracking else "tracking: face lost")
             was_tracking = tracking
-        if pan is not None:
-            await send_to_robot({"type": "pan", "deg": pan})
-        if tilt is not None:
-            await send_to_robot({"type": "tilt", "deg": tilt})
+            _idle_debug(
+                f"tracking {tracking} queued pan={pan} tilt={tilt} gen={gen} "
+                f"est=({getattr(tracker, 'pan', None)},{getattr(tracker, 'tilt', None)}) "
+                f"pose_gen={getattr(tracker, 'pose_gen', None)} sent={idle_sent} synced={pose_synced}"
+            )
+            if tracking and idle_sent is not False:
+                async with claim_head():
+                    pass
         eyes.tracking_info = {"tracking": tracking, "pan": pan, "tilt": tilt}
+        if pan is None and tilt is None:
+            continue
+        if idle_sent is not False:
+            async with claim_head():
+                await _send_track(pan, tilt, gen)
+            continue
+        await _send_track(pan, tilt, gen)
 
 
 def staying_up(now: float | None = None) -> bool:
@@ -1064,7 +1338,7 @@ async def doze_loop() -> None:
         if was_awake and not awake:
             print(f"({config.ROBOT_NAME} dozed off — say \"hey {config.ROBOT_NAME}\" to wake him)")
             await send_to_robot({"type": "asleep", "on": True})
-            await set_head_held(False)  # idle life resumes; the head may wander again
+            await set_head_held(False)  # asleep, so idle stays off until he wakes
         was_awake = awake
 
 
@@ -1132,10 +1406,12 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
         # Heard his name: eyes open, perk up to eye level (tilt 0).
         await send_to_robot({"type": "asleep", "on": False})
         await send_to_robot({"type": "emotion", "name": "surprised"})
-        if tracker is None or not tracker.tracking:
-            await send_to_robot({"type": "tilt", "deg": 0})
-            if tracker is not None:
-                tracker.note_pose(tilt=0)
+        idle_ctl.note_activity(time.monotonic())
+        async with claim_head():
+            if tracker is None or not tracker.tracking:
+                await send_to_robot({"type": "tilt", "deg": 0})
+                if tracker is not None:
+                    tracker.note_pose(tilt=0)
     if woke and not question:
         # Just "hey Rocky" — wait for the actual question.
         await say(lines["wake"])
@@ -1188,7 +1464,9 @@ async def main() -> None:
     shown_lights = ", ".join(lights.names) if lights.names else "none"
     print(f"home lights: {shown_lights}")
     brain = RobotBrain(configured_actions(), configured_tools())
-    tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
+    tracker = Tracker(
+        eyes, lambda p, t, on, gen: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on, gen)),
+    )
     eyes.has_annotator = True
     tracker.start()
     print("face tracking:", "on" if config.TRACKING else f"off — say \"{config.ROBOT_NAME}, track me\" or type `track on`")
@@ -1197,6 +1475,8 @@ async def main() -> None:
         voice_task = asyncio.create_task(voice_loop())
         doze_task = asyncio.create_task(doze_loop())
         head_task = asyncio.create_task(head_loop())
+        idle_task = asyncio.create_task(idle_loop())
+        print("idle motion:", "automatic" if config.IDLE_ENABLED else "off (IDLE_ENABLED = False)")
         pick_camera_source()
         if config.LISTEN_ON_START:
             await start_listening()
@@ -1206,6 +1486,7 @@ async def main() -> None:
             voice_task.cancel()
             doze_task.cancel()
             head_task.cancel()
+            idle_task.cancel()
             mac_camera.stop()
             if ears is not None:
                 stop_listening()

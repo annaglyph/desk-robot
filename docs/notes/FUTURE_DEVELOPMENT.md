@@ -35,9 +35,12 @@ trace runs only when `DESK_ROBOT_TCP_TRACE=1`.
 
 ### Next
 
-Natural servo motion: half-cosine ease on commanded pan and tilt, then subtle
-idle movement while awake. Not started. The brain still sends `glance off` on
-connect, so the firmware's existing idle glances do not run in normal use.
+Stage 2 idle ownership is in: the brain switches the laboratory choreography
+on when Rocky is quiet, and off for speech, looks, and face tracking. The
+60-second awake clock is unchanged. The heartbeat `idle` flag can still
+disagree with the brain's ownership record; that follow-up is under
+Awake / Idle / Sleep Lifecycle and belongs with the sleep work. Half-cosine
+easing on commanded moves is still parked.
 
 ---
 
@@ -452,6 +455,37 @@ Rocky should only do expressive idle movement while awake. After a stretch
 without meaningful interaction he should return to neutral, stop, and use
 the sleep behaviour that already exists.
 
+#### Follow-up: heartbeat `idle` vs brain ownership
+
+Recorded with Stage 2. The comparison below is unchanged on purpose. The
+60-second awake clock stays as it is and belongs to this lifecycle work.
+
+The 5-second `state` heartbeat reports `idleMotion.enabled()`, the idle
+switch. It does not report whether the gate is open (brain connected and
+face awake) or whether a gesture is in progress.
+
+The brain keeps its own `idle_sent`. `_note_heartbeat` treats `idle: true`
+while `idle_sent` is false as a serial-console `idle on`. It clears
+`idle_sent` to unknown and marks the pose unsynced, so the next move claims
+the head again.
+
+Those two records can disagree:
+
+1. A brain process still inside an earlier `awake_until` window sends
+   `glance on` after the quiet period, before anyone speaks in this sitting.
+   A later glance-off that the brain counts as done (`idle_sent` false),
+   while the firmware switch is still on, makes the next heartbeat look like
+   a console override.
+2. `_sync_head` records idle as off after it sends `glance off`, including
+   when the `idle_ack` never arrives. If that off did not reach the firmware,
+   or a `glance on` landed afterwards, the heartbeat still shows the switch on.
+
+Hardware face-tracking after the once-per-send correction did not show this
+path driving the head. Leave the heartbeat comparison and `AWAKE_SECONDS`
+alone until the sleep lifecycle work. A later alignment can report
+`enabled && gate` in `state`, or treat a heartbeat `idle: true` as
+information and keep pose sync on `idle_ack`.
+
 #### What exists today
 
 Inactivity is measured only in the Python brain. `AWAKE_SECONDS` is 60.
@@ -482,12 +516,13 @@ tilt to 0° when face tracking is not active. The console sleep-off control
 opens the eyes and starts another 60-second window. Neither path centres
 pan.
 
-On connect, the brain sends `glance off` and leaves it off.
-`set_head_held` only updates a console flag; the comment in `doze_loop`
-that says idle life resumes is stale. Production idle head glances
-therefore do not run while the brain is connected. The firmware can still
-glance, at pan ±25° and tilt ±10°, but only when glances are enabled, the
-brain is connected, and the face is awake.
+On connect the brain claims the head with `glance off` and reads the held
+pose from `idle_ack`. After the quiet period it may send `glance on`. A
+deliberate look holds its pose, then idle can return. Speech, thinking,
+playback, and face tracking (including a still face, while tracking stays
+enabled) turn idle off. The firmware plays the Calm/Curious/Lively
+choreography only while the switch is on, the brain is connected, and the
+face is awake. The heartbeat mismatch above is the open part of this.
 
 Servo relaxation is separate from sleep. `ServoNeck::update` eases toward
 the current target. Once an axis is within 0.25° and stays there for

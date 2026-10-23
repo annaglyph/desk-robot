@@ -86,8 +86,9 @@ void IdleMotion::setPreset(const char* name) {
 
 void IdleMotion::noteActivity(uint32_t nowMs) {
   if (!enabled_ || pan_ == nullptr || tilt_ == nullptr) return;
-  // setTarget/setRaw already replaced the commanded axis. Drop whichever
-  // idle curve is still running, then wait before planning again.
+  // Only an idle moveTo() curve is cancelled. setTarget/setRaw already
+  // cleared that flag on the commanded axis, so a tracking or look ease
+  // keeps running.
   pan_->cancelTrajectory();
   tilt_->cancelTrajectory();
   idleHoldBonus_ = 0;

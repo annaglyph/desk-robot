@@ -12,9 +12,9 @@
 // connected and Rocky is awake. Sleep, glance off, idle off, and a brain
 // disconnect stop a gesture where it is.
 //
-// Leave face tracking off while this is on. Tracking a face that is already
-// still sends no pan or tilt, so the command cooldown cannot hold idle back.
-// The brain still owns tracking; pose sync belongs to a later change.
+// The brain owns the switch. It turns idle off for tracking, a still face
+// included, and reads the held pose back from the idle_ack to `glance off`.
+// Switched on from the serial console, nothing holds idle back for a face.
 
 class IdleMotion {
  public:

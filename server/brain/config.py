@@ -234,7 +234,19 @@ TRACK_TILT_SIGN = 1        # flip to -1 if it nods the wrong way
 TRACK_PAN_LIMIT = 70.0     # must match PAN_MIN/MAX_DEG in firmware config.h
 TRACK_TILT_MIN = -75.0     # must match TILT_MIN_DEG in firmware config.h
 TRACK_TILT_MAX = 37.0      # must match TILT_MAX_DEG in firmware config.h
-TRACK_LOST_SECONDS = 4.0   # no face this long → idle glances resume
+TRACK_LOST_SECONDS = 4.0   # no face this long → tracking ends; idle may follow
+
+# Idle head motion. The firmware plays the Calm/Curious/Lively choreography;
+# the brain only switches it on when Rocky is awake, connected and quiet, and
+# off for listening, thinking, speaking, tracking and held looks. Idle motion
+# never refreshes the awake clock. False keeps idle off, as before.
+IDLE_ENABLED = True
+IDLE_QUIET_SECONDS = 8.0       # nothing happening this long before idle starts
+IDLE_LOOK_HOLD_SECONDS = 30.0  # a deliberate look holds its pose this long
+IDLE_ACK_SECONDS = 0.5         # wait this long for the firmware's idle_ack
+# Idle reasons, glance/ack/claim, and tracking pose updates. Off by default.
+# Set True to turn the log back on. It does not change motion.
+IDLE_DEBUG = False
 
 # How many conversation turns to remember before forgetting the oldest.
 MAX_HISTORY_TURNS = 20

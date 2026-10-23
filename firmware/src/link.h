@@ -86,7 +86,10 @@ class Link {
   // Robot → server. From the link task this sends immediately. From any
   // other task it copies the JSON onto a bounded queue and returns.
   void sendJson(const String& json);
-  void sendState(float panDeg, const char* emotion);
+  void sendState(float panDeg, float tiltDeg, bool idle, const char* emotion);
+  // Reply to a `glance` that carried an id. Pan and tilt are the neck's
+  // current angles once that glance has been applied.
+  void sendIdleAck(uint32_t id, bool idle, float panDeg, float tiltDeg);
   // Binary frame: one type byte (0x01 = mic audio, 0x02 = JPEG) + payload.
   // Only the link task may call this. Other callers are ignored and return
   // false. The result is the WebSocket library's binary-send result.
