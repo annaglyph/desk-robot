@@ -50,8 +50,9 @@ class DanceTests(unittest.TestCase):
             # fast neck for the dance, everyday speeds after it
             motion = [m for m in sent if m["type"] == "motion"]
             self.assertEqual([m["speed"] for m in motion[:2]], [dance.DANCE_SPEED] * 2, name)
-            self.assertEqual({m["axis"]: m["speed"] for m in motion[2:]},
-                             {"pan": dance.config.TRACK_PAN_SPEED, "tilt": dance.config.TRACK_TILT_SPEED}, name)
+            self.assertEqual({m["axis"]: (m["speed"], m["accel"]) for m in motion[2:]},
+                             {"pan": (dance.config.TRACK_PAN_SPEED, dance.config.TRACK_PAN_ACCEL),
+                              "tilt": (dance.config.TRACK_TILT_SPEED, dance.config.TRACK_TILT_ACCEL)}, name)
             first_move = next(i for i, m in enumerate(sent) if m["type"] in ("pan", "tilt"))
             self.assertTrue(all(m["type"] == "motion" for m in sent[:2]) and first_move >= 2, name)
 

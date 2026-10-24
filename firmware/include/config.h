@@ -32,7 +32,7 @@ constexpr uint8_t PIN_I2S_DIN = 3;  // D2 → MAX98357A DIN
 // ─── Display ─────────────────────────────────────────────────────────────────
 // Which OLED: 1 = the 2.42" SSD1309 (HiLetgo) in the V2 head, 0 = the 1.3" SH1106 of V1. Same 128x64 pixels, so
 // the face code is the same for both.
-#define OLED_SSD1309_242 1
+#define OLED_SSD1309_242 0
 // Turn the picture 180 degrees: the V2 head holds the 2.42" screen upside down.
 constexpr bool OLED_FLIP = true;
 
@@ -57,20 +57,21 @@ constexpr uint32_t ASSEMBLY_WINDOW_MS = 5000;
 // same both ways. (To measure another servo: `raw pan <deg>` past the limits, see
 // where the head stops following.) Re-mesh one tooth to move home a long way: each
 // tooth = 12 head degrees.
-constexpr float PAN_MIN_DEG = -95.0f;   // head turn limit, robot's left
-constexpr float PAN_MAX_DEG = 95.0f;    // robot's right
-constexpr float PAN_GEAR_RATIO = 38.0f / 30.0f;  // head degrees per servo degree
-constexpr bool PAN_INVERT = false;      // flip if `pan 30` turns Rocky's LEFT (your right)
-constexpr float PAN_MAX_SPEED = 150.0f; // head deg/sec ceiling (the servo itself does ~120 servo deg/sec)
+constexpr float PAN_MIN_DEG = -70.0f;   // head turn limit, robot's left
+constexpr float PAN_MAX_DEG = 70.0f;    // robot's right
+// constexpr float PAN_GEAR_RATIO = 38.0f / 30.0f;  // head degrees per servo degree
+constexpr float PAN_GEAR_RATIO = 1.0f;  // head degrees per servo degree
+constexpr bool PAN_INVERT = true;      // flip if `pan 30` turns Rocky's LEFT (your right)
+constexpr float PAN_MAX_SPEED = 120.0f; // head deg/sec ceiling (the servo itself does ~120 servo deg/sec)
 constexpr float PAN_ACCEL = 450.0f;     // head deg/sec^2: how gently it speeds up and slows down
-constexpr float PAN_TRIM_DEG = 0.0f;    // SERVO degrees; 1 here moves the head 1.27. Keep it small: to
+constexpr float PAN_TRIM_DEG = 8.0f;    // SERVO degrees; 1 here moves the head 1.27. Keep it small: to
                                         // move home a long way, re-mesh the gears with the servo
                                         // centred instead
 
 // Tilt drives the head plate directly. The head clears 94 deg face-down and 99 deg
 // face-up, so the servo's own +-90 is the limit; these stop 5 deg short of it.
-constexpr float TILT_MIN_DEG = -85.0f;  // look-down limit
-constexpr float TILT_MAX_DEG = 85.0f;   // look-up limit
+constexpr float TILT_MIN_DEG = -75.0f;  // look-down limit
+constexpr float TILT_MAX_DEG = 37.0f;   // look-up limit
 // The head's weight sits ~40 mm above the tilt axis and ~3 mm in front of it, so it balances about 4 deg above
 // level. Level or a little down it leans forward and the servo's gears hold it unpowered; tipped up past the balance
 // point it falls back until it looks at the ceiling. So the tilt servo only goes quiet at rest between these angles,
@@ -84,10 +85,10 @@ constexpr float TILT_RELAX_MAX_DEG = 1.0f;
 // on the head board is the quiet fix; 30000 here is the fallback.
 constexpr uint32_t TILT_REFRESH_MS = 0;
 constexpr uint32_t TILT_REFRESH_BURST_MS = 300;
-constexpr float TILT_MAX_SPEED = 160.0f;
+constexpr float TILT_MAX_SPEED = 120.0f;
 constexpr float TILT_ACCEL = 600.0f;
-constexpr float TILT_TRIM_DEG = 0.0f;   // tweak so the head sits level at 0
-constexpr bool TILT_INVERT = true;      // flip if `tilt 15` looks DOWN instead of up
+constexpr float TILT_TRIM_DEG = 0;   // tweak so the head sits level at 0
+constexpr bool TILT_INVERT = false;      // flip if `tilt 15` looks DOWN instead of up
 
 // First time on new hardware: try small moves (`pan 20`, `tilt 15`) before big
 // ones, and check each axis turns the right way.
@@ -111,8 +112,8 @@ constexpr float MIC_GAIN = 6.0f;
 // Flip + mirror = rotate the sensor's picture 180 degrees. The V2 head holds the
 // camera on its side; the brain turns the frames upright (CAMERA_ROTATE and
 // CAMERA_MIRROR in server/brain/config.py).
-constexpr bool CAMERA_VFLIP = true;
-constexpr bool CAMERA_HMIRROR = true;
+constexpr bool CAMERA_VFLIP = false;
+constexpr bool CAMERA_HMIRROR = false;
 
 // ─── Speaker ─────────────────────────────────────────────────────────────────
 // 0.0-1.0 software volume for the MAX98357A (the brain sends its own on connect). The amp's GAIN pin: floating =

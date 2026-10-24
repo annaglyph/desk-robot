@@ -636,8 +636,8 @@
         </div>
         <div class="card">
           <h2 class="label"><span>Head</span><span class="sub" id="headnote"></span></h2>
-          <div class="field"><label class="k" for="pan">Pan</label><input type="range" id="pan" min="-95" max="95" step="1" value="0"><span class="v" id="panv">0°</span></div>
-          <div class="field"><label class="k" for="tilt">Tilt</label><input type="range" id="tilt" min="-85" max="85" step="1" value="0"><span class="v" id="tiltv">0°</span></div>
+          <div class="field"><label class="k" for="pan">Pan</label><input type="range" id="pan" min="-70" max="70" step="1" value="0"><span class="v" id="panv">0°</span></div>
+          <div class="field"><label class="k" for="tilt">Tilt</label><input type="range" id="tilt" min="-75" max="37" step="1" value="0"><span class="v" id="tiltv">0°</span></div>
           <div class="row">
             <button type="button" id="centerbtn">Center and relax</button>
             <button type="button" id="trackbtn">Follow my face</button>
@@ -1699,7 +1699,7 @@ const FaceKit = (() => {
     if (s.limits) { $("pan").min = -s.limits.pan; $("pan").max = s.limits.pan; $("tilt").min = s.limits.tilt[0]; $("tilt").max = s.limits.tilt[1]; }
     paintRange($("pan")); paintRange($("tilt"));
     // the camera HUD: pan along the bottom, tilt up the side, the reticle locks on a face
-    const pl = s.limits?.pan || 95, [t0, t1] = s.limits?.tilt || [-85, 85];
+    const pl = s.limits?.pan || 70, [t0, t1] = s.limits?.tilt || [-75, 37];
     $("pangauge").style.left = Math.min(100, Math.max(0, (pan + pl) / (2 * pl) * 100)) + "%";
     $("tiltgauge").style.top = Math.min(100, Math.max(0, (t1 - tilt) / (t1 - t0 || 1) * 100)) + "%";
     $("viewport").classList.toggle("locked", !!s.tracking);

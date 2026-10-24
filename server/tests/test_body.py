@@ -106,7 +106,7 @@ class BodyTests(unittest.TestCase):
             await asyncio.sleep(0.3)
             async with b.hold():
                 n = len(robot.sent)
-                tracker.pan = 95.0        # the look turned him all the way right
+                tracker.pan = config.TRACK_PAN_LIMIT        # the look turned him all the way right
                 await asyncio.sleep(0.4)
                 self.assertEqual(len(robot.sent), n, "nothing sent while the picture is taken")
             b.feel("curious")             # the real emotion arrives with the answer
@@ -146,7 +146,7 @@ class BodyTests(unittest.TestCase):
             await asyncio.sleep(0.4)
             self.assertGreater(robot.last("tilt"), 1.0)
             async with b.hold():          # a look that only turns pan
-                tracker.pan = 95.0
+                tracker.pan = config.TRACK_PAN_LIMIT
             self.assertEqual(robot.last("tilt"), 0.0, "tilt back to level, where its servo can rest")
             self.assertEqual(tracker.motion["tilt"].target, 0.0, "and the look waits for it")
         run(go())

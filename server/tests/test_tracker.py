@@ -3,12 +3,13 @@
 import time
 import unittest
 
+from brain import config
 from brain.tracker import Motion
 
 
 class MotionTests(unittest.TestCase):
     def test_arrival_time(self):
-        m = Motion(150.0, 450.0)                     # = PAN_MAX_SPEED, PAN_ACCEL in firmware config.h
+        m = Motion(config.TRACK_PAN_SPEED, config.TRACK_PAN_ACCEL)  # firmware PAN_MAX_SPEED, PAN_ACCEL
         now = time.time()
         m.t = now
         self.assertEqual(m.arrival_in(now), 0.0)     # already there

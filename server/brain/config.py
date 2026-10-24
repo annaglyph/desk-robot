@@ -275,20 +275,20 @@ TRACK_DEADBAND = 0.05      # ignore errors smaller than this fraction of half-fr
 TRACK_PAN_SIGN = 1         # flip to -1 if the head turns AWAY from you
 TRACK_TILT_SIGN = 1        # flip to -1 if it nods the wrong way
 # The head's range, used everywhere the brain moves it (tracking, `look`, the dashboard's sliders, what the model
-# is told it can do).
-TRACK_PAN_LIMIT = 95.0     # must match PAN_MIN/MAX_DEG in firmware config.h
-TRACK_TILT_MIN = -85.0     # must match TILT_MIN/MAX_DEG in firmware config.h
-TRACK_TILT_MAX = 85.0
+# is told it can do). Must match PAN_MIN/MAX_DEG and TILT_MIN/MAX_DEG in firmware config.h.
+TRACK_PAN_LIMIT = 70.0
+TRACK_TILT_MIN = -75.0
+TRACK_TILT_MAX = 37.0
 TRACK_LOST_SECONDS = 4.0   # no face this long → he stops following and the head stays where it is
-# Face tracking's own tilt range, inside the head's +-85: plenty to follow a face without nodding right down.
-TRACK_FOLLOW_TILT = (-30.0, 60.0)
+# Face tracking's own tilt range, inside the head's travel: plenty to follow a face without nodding right down.
+TRACK_FOLLOW_TILT = (-30.0, TRACK_TILT_MAX)
 # A frame shows where the head was a moment ago (exposure, JPEG, WiFi), and the head is still moving to where it
 # was last sent. The tracker keeps a copy of the firmware's motion (speed + acceleration limits, firmware config.h)
 # to know where the head pointed when each frame was taken, so it aims at where the face really is instead of
 # piling fresh moves on top of ones the camera hasn't seen yet (that overshoots and oscillates).
 TRACK_LATENCY_S = 0.3      # camera → brain delay plus servo lag, seconds (measured 0.18-0.38)
-TRACK_PAN_SPEED, TRACK_PAN_ACCEL = 150.0, 450.0     # = PAN_MAX_SPEED, PAN_ACCEL
-TRACK_TILT_SPEED, TRACK_TILT_ACCEL = 160.0, 600.0   # = TILT_MAX_SPEED, TILT_ACCEL
+TRACK_PAN_SPEED, TRACK_PAN_ACCEL = 120.0, 450.0     # = PAN_MAX_SPEED, PAN_ACCEL
+TRACK_TILT_SPEED, TRACK_TILT_ACCEL = 120.0, 600.0   # = TILT_MAX_SPEED, TILT_ACCEL
 
 # How many conversation turns to remember before forgetting the oldest.
 MAX_HISTORY_TURNS = 20
