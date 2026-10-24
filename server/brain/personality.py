@@ -6,7 +6,17 @@ story — it pins down how Rocky talks, what he cares about, and how he treats
 his human. The example replies at the bottom do most of the work; add more
 whenever a real exchange comes out sounding right. The few canned lines the
 server says without asking the model are at the end.
+
+Stable facts about the household live in server/personal_context.txt
+(git-ignored; copy personal_context.example.txt and replace the fiction).
+They are read once, as UTF-8, when this module loads, and appended as
+things Rocky knows. Do not put instructions in that file: a copied line
+is shown to him as knowledge. Missing, empty, or unreadable means no
+extra section. The section is part of the system prompt only, so a
+conversation does not collect another copy of it on each turn.
 """
+
+from pathlib import Path
 
 from . import config
 
@@ -169,7 +179,37 @@ Example replies:
 """
 
 
+_PERSONAL_CONTEXT_FILE = Path(__file__).resolve().parent.parent / "personal_context.txt"
+_PERSONAL_CONTEXT_HEADING = (
+    "What you know about your human and crew. Say it as something you know. "
+    "Never mention a file, notes, a prompt, or where you learned it:"
+)
+
+
+def load_personal_context(path: Path | None = None) -> str:
+    """UTF-8 text from the private file, or "" if it is missing, empty, or unreadable."""
+    target = _PERSONAL_CONTEXT_FILE if path is None else Path(path)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    return text.strip()
+
+
+def compose_system_prompt(personal_context: str, base: str | None = None) -> str:
+    """The personality prompt, plus a personal-context section when there is text.
+
+    A second call with a prompt that already has the section leaves it as it is.
+    """
+    prompt = ROCKY_PROMPT if base is None else base
+    context = personal_context.strip()
+    if not context or _PERSONAL_CONTEXT_HEADING in prompt:
+        return prompt
+    return f"{prompt.rstrip()}\n\n{_PERSONAL_CONTEXT_HEADING}\n{context}\n"
+
+
 ROCKY_PROMPT, ROCKY_LINES = SYSTEM_PROMPT, LINES   # his own, whoever is active (the tests check them)
 if config.CHARACTER:
     SYSTEM_PROMPT = _character_prompt(config.CHARACTER)
     LINES = {k: v.replace("{human}", config.HUMAN_NAME) for k, v in config.CHARACTER["lines"].items()}
+SYSTEM_PROMPT = compose_system_prompt(load_personal_context(), SYSTEM_PROMPT)

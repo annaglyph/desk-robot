@@ -39,6 +39,13 @@ from . import config
 SAMPLE_RATE = 16_000
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 
+# Spoken stand-ins for words Fish mispronounces. Applied only to the text
+# sent to Fish, never to what the model wrote, the dashboard shows, or history.
+# Keys are whole words: "Rus" does not match "Russia".
+PRONUNCIATIONS = {
+    "Rus": "Russ",
+}
+
 
 def fish_available() -> bool:
     return bool(config.TTS_VOICE_ID and os.environ.get("FISH_AUDIO_API_KEY"))
@@ -84,6 +91,20 @@ def clean_for_acting(text: str) -> str:
     return text if re.search(r"\w", words) else ""
 
 
+def pronounce(text: str) -> str:
+    """A copy of `text` with PRONUNCIATIONS applied to whole words only.
+
+    Punctuation stays put: "Rus.", "Rus's" and "Hey, Rus!" still match.
+    The caller's string is not modified. An empty mapping returns `text`.
+    """
+    if not text or not PRONUNCIATIONS:
+        return text
+    pattern = r"\b(?:%s)\b" % "|".join(
+        re.escape(word) for word in sorted(PRONUNCIATIONS, key=len, reverse=True)
+    )
+    return re.sub(pattern, lambda match: PRONUNCIATIONS[match.group(0)], text)
+
+
 def clean_for_tts(text: str) -> str:
     """What the voice model gets: plain spoken words. Markdown marks, emoji
     and runs of punctuation tend to make generated speech do odd things."""
@@ -98,6 +119,7 @@ def clean_for_tts(text: str) -> str:
 
 def _fish_stream(text: str) -> Iterator[bytes]:
     """Raw 16 kHz PCM from Fish Audio, yielded as the server produces it."""
+    text = pronounce(text)
     body = json.dumps(
         {
             "text": text,

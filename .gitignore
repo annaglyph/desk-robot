@@ -14,6 +14,9 @@ firmware/include/secrets.h
 .env.*
 !.env.example
 
+# Private household facts injected into the prompt. See personal_context.example.txt.
+server/personal_context.txt
+
 # Dashboard settings: personal (your location, your name)
 server/settings.json
 # Perception models: downloaded on first run (brain/perception.py), pinned and checksummed

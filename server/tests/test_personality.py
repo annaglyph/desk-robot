@@ -1,6 +1,8 @@
 """Rocky's character file and the speaker tuning his voice goes through."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -23,6 +25,63 @@ class CharacterTests(unittest.TestCase):
         self.assertEqual(len(config.TTS_VOICE_ID), 32)
         self.assertIn(f"hey {config.ROBOT_NAME.lower()}", config.WAKE_PHRASES)
         self.assertIn(config.ROBOT_NAME, config.STT_PROMPT)
+
+
+class PersonalContextTests(unittest.TestCase):
+    def test_present_file_is_added_under_the_heading(self):
+        fact = "Alex shares a flat with Sam and a cat named Miso."
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            path.write_text(fact + "\n", encoding="utf-8")
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
+        self.assertIn(fact, prompt)
+        self.assertIn("[happy] Coffee is fuel", prompt)
+        self.assertGreater(prompt.index(fact), prompt.index("Example replies:"))
+
+    def test_absent_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
+        self.assertNotIn("Miso", prompt)
+
+    def test_empty_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "personal_context.txt"
+            path.write_text(" \n\n\t", encoding="utf-8")
+            prompt = personality.compose_system_prompt(personality.load_personal_context(path))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
+
+    def test_unreadable_file_adds_no_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prompt = personality.compose_system_prompt(personality.load_personal_context(Path(directory)))
+        self.assertEqual(prompt, personality.compose_system_prompt(""))
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, prompt)
+
+    def test_the_same_context_is_not_added_twice(self):
+        fact = "Alex shares a flat with Sam and a cat named Miso."
+        once = personality.compose_system_prompt(fact)
+        again = personality.compose_system_prompt(fact, once)
+        self.assertEqual(again, once)
+        self.assertEqual(once.count(fact), 1)
+        self.assertEqual(once.count(personality._PERSONAL_CONTEXT_HEADING), 1)
+
+    def test_active_prompt_carries_the_section_at_most_once(self):
+        self.assertLessEqual(personality.SYSTEM_PROMPT.count(personality._PERSONAL_CONTEXT_HEADING), 1)
+        self.assertIn("[neutral]", personality.SYSTEM_PROMPT)
+        self.assertNotIn(personality._PERSONAL_CONTEXT_HEADING, personality.ROCKY_PROMPT)
+
+    def test_example_file_is_safe_to_inject(self):
+        example = Path(__file__).resolve().parents[1] / "personal_context.example.txt"
+        prompt = personality.compose_system_prompt(example.read_text(encoding="utf-8"))
+        lowered = prompt.lower()
+        self.assertIn("Miso", prompt)
+        self.assertNotIn("personal_context", lowered)
+        self.assertNotIn("private file", lowered)
+        self.assertNotIn("#", example.read_text(encoding="utf-8"))
 
 
 class SpeakerTuningTests(unittest.TestCase):
