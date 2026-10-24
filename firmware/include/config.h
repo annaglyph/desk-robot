@@ -125,3 +125,8 @@ constexpr float SPEAKER_VOLUME = 0.7f;
 // ─── Behavior ────────────────────────────────────────────────────────────────
 constexpr uint32_t FRAME_INTERVAL_MS = 33; // ~30 FPS face animation
 constexpr uint32_t SERVO_UPDATE_MS = 20;   // 50 Hz, the servos' own pulse rate
+
+// Station Wi-Fi (net.cpp): join timeout matches the old Link retry; wait this
+// long after a failed round before scanning again. Setup AP is Stage 3.
+constexpr uint32_t WIFI_JOIN_MS = 20000;
+constexpr uint32_t WIFI_RETRY_MS = 20000;

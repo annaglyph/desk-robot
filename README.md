@@ -332,8 +332,13 @@ without settings or server buttons.
    the same `ROBOT_TOKEN` you put in `server/.env`. The ESP32 only sees
    **2.4 GHz** networks.
 
-3. Flash again with `pio run -t upload`. The serial console shows
-   `wifi: connected` and then `brain: connected` once the server is running.
+3. Flash again with `pio run -t upload` (the default env is `xiao_esp32s3`).
+   The first boot copies that Wi-Fi name into flash (NVS). Later uploads keep
+   it, so the Mac hotspot still works without editing `secrets.h` again. A
+   full chip erase wipes those profiles; the next boot copies `secrets.h`
+   once more. Type `wifi` on the USB console for saved names (never passwords).
+   The serial console shows `wifi: connected` and then `brain: connected`
+   once the server is running.
 
 From then on the server listens through the robot's microphone and speaks
 through the robot's speaker whenever the robot is connected, and falls back

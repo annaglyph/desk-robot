@@ -5,25 +5,10 @@
 
 #include "config.h"   // FW_VERSION
 
-void Link::begin(const char* ssid, const char* pass, const char* host,
-                 uint16_t port, const char* token, CommandHandler onCommand,
-                 StateHandler onState) {
-  ssid_ = ssid;
-  pass_ = pass;
+void Link::begin(const char* token, CommandHandler onCommand, StateHandler onState) {
   token_ = token;
   onCommand_ = std::move(onCommand);
   onState_ = std::move(onState);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);  // lower latency; we're on wall power anyway
-  // Hear every channel before joining, then pick the strongest access point with this name. The default stops at
-  // the first one it hears, which with a mesh or a second router can be a far one: a slow, gappy link until it drops.
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
-  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(ssid_, pass_);
-  Serial.printf("wifi: joining \"%s\"...\n", ssid_);
-
-  ws_.begin(host, port, "/");
   ws_.onEvent([this](WStype_t type, uint8_t* payload, size_t length) {
     onEvent(type, payload, length);
   });
@@ -31,31 +16,32 @@ void Link::begin(const char* ssid, const char* pass, const char* host,
   ws_.enableHeartbeat(15000, 3000, 2);  // ping every 15 s, drop after 2 misses
 }
 
+void Link::setBrain(const char* host, uint16_t port) {
+  if (!host || !host[0] || port == 0) return;
+  if (socketOn_ && port_ == port && strcmp(host_, host) == 0) return;
+  strlcpy(host_, host, sizeof(host_));
+  port_ = port;
+  socketOn_ = true;
+  connected_ = false;
+  lowTxPower_ = false;
+  lastTxCheckMs_ = millis() - 5000;
+  ws_.begin(host_, port_, "/");
+}
+
+void Link::wifiDown() {
+  if (!socketOn_ && !connected_) return;
+  socketOn_ = false;
+  host_[0] = 0;
+  port_ = 0;
+  if (connected_) {
+    connected_ = false;
+    if (onState_) onState_(false);
+  }
+  ws_.disconnect();
+}
+
 void Link::update(uint32_t nowMs) {
-  bool wifiUp = WiFi.status() == WL_CONNECTED;
-  if (wifiUp && !wifiReported_) {
-    Serial.printf("wifi: connected, ip %s\n", WiFi.localIP().toString().c_str());
-    wifiReported_ = true;
-    lowTxPower_ = false;           // a fresh join starts at full power; the check below turns it down again
-    lastTxCheckMs_ = nowMs - 5000;
-  } else if (!wifiUp && wifiReported_) {
-    Serial.println(F("wifi: lost, retrying"));
-    wifiReported_ = false;
-  }
-  if (!wifiUp) {
-    // The WiFi stack rejoins by itself after most drops, but not after every failed join: after one reboot it sat
-    // on "joining" for minutes. So if it has been down for a while, start the join over.
-    if (wifiDownSinceMs_ == 0) {
-      wifiDownSinceMs_ = nowMs ? nowMs : 1;
-    } else if (nowMs - wifiDownSinceMs_ > 20000) {
-      Serial.printf("wifi: still not connected (status %d), joining \"%s\" again\n", static_cast<int>(WiFi.status()), ssid_);
-      WiFi.disconnect();
-      WiFi.begin(ssid_, pass_);
-      wifiDownSinceMs_ = nowMs ? nowMs : 1;
-    }
-    return;
-  }
-  wifiDownSinceMs_ = 0;
+  if (!socketOn_ || WiFi.status() != WL_CONNECTED) return;
 
   // Transmit power to suit the signal. Sending (camera pictures, all day) is the chip's biggest power draw and so its
   // biggest heat source, and full power is only needed far from the router: 11 dBm while the router comes in loud,

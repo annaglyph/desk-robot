@@ -14,6 +14,7 @@
 #include "home_screen.h"
 #include "link.h"
 #include "mic.h"
+#include "net.h"
 #include "servo_neck.h"
 #include "speaker.h"
 
@@ -156,6 +157,7 @@ void printHelp() {
   Serial.println(F("  servo        check the servo PWM timing"));
   Serial.println(F("  temp         chip temperature"));
   Serial.println(F("  loop         slowest time of each part of the main loop since the last `loop`"));
+  Serial.println(F("  wifi         saved networks and join status (names only, no passwords)"));
   Serial.println(F("  help         this text"));
 }
 
@@ -171,6 +173,12 @@ static void runCommand(String line) {
 
   if (cmd == "help") {
     printHelp();
+  } else if (cmd == "wifi") {
+#if HAVE_BRAIN
+    net.printStatus();
+#else
+    Serial.println(F("wifi: USB-only build (no secrets.h)"));
+#endif
   } else if (cmd == "emo") {
     Emotion e;
     if (emotionFromName(arg.c_str(), e)) {
@@ -660,7 +668,20 @@ void setup() {
 #ifndef ROBOT_TOKEN
 #define ROBOT_TOKEN ""
 #endif
-  brainLink.begin(WIFI_SSID, WIFI_PASS, BRAIN_HOST, BRAIN_PORT, ROBOT_TOKEN,
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS ""
+#endif
+#ifndef BRAIN_HOST
+#define BRAIN_HOST ""
+#endif
+#ifndef BRAIN_PORT
+#define BRAIN_PORT 8765
+#endif
+  net.begin(WIFI_SSID, WIFI_PASS, BRAIN_HOST, BRAIN_PORT);
+  brainLink.begin(ROBOT_TOKEN,
              [](const String& cmd) { handleCommand(cmd); },
              [](bool connected) {
                // The brain says whether he's awake when it connects. If it goes away while he's awake, he can't hear
@@ -716,7 +737,13 @@ void loop() {
   uint32_t t0;
 #if HAVE_BRAIN
   t0 = micros();
-  brainLink.update(now);
+  net.update(now);
+  if (net.staUp() && net.brainHost()[0]) {
+    brainLink.setBrain(net.brainHost(), net.brainPort());
+    brainLink.update(now);
+  } else {
+    brainLink.wifiDown();
+  }
   loopTime(LP_LINK, t0);
   if (speakDonePending) {
     speakDonePending = false;

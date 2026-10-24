@@ -4,12 +4,14 @@
 #include <WebSocketsClient.h>
 #include <functional>
 
-// Link: WiFi + a WebSocket to the brain server.
+#include "net_policy.h"
+
+// Link: a WebSocket to the brain once station Wi-Fi is up (Net joins the AP).
 //
-// Joins WiFi, connects to ws://<host>:<port>, reconnects on its own, and
-// turns the server's JSON commands (docs/protocol.md) into the same text
-// commands the serial console uses — so "emotion happy" from the brain and
-// "emo happy" typed over USB take the exact same path.
+// Connects to ws://<host>:<port>, reconnects on its own, and turns the
+// server's JSON commands (docs/protocol.md) into the same text commands the
+// serial console uses — so "emotion happy" from the brain and "emo happy"
+// typed over USB take the exact same path.
 
 class Link {
  public:
@@ -18,9 +20,10 @@ class Link {
   using AudioHandler = std::function<void(const uint8_t* pcm, size_t len)>;
   using SettingsHandler = std::function<void(const char* json)>;
 
-  void begin(const char* ssid, const char* pass, const char* host,
-             uint16_t port, const char* token, CommandHandler onCommand,
-             StateHandler onState = nullptr);
+  void begin(const char* token, CommandHandler onCommand, StateHandler onState = nullptr);
+  // Host/port from the current NVS profile. Restarts the socket if they change.
+  void setBrain(const char* host, uint16_t port);
+  void wifiDown();
 
   // Binary frames from the brain: type byte 0x01 = TTS audio (16 kHz s16le).
   void onAudio(AudioHandler h) { onAudio_ = std::move(h); }
@@ -29,7 +32,7 @@ class Link {
   // The brain's `face` message (a face pack), passed on as the raw JSON.
   void onFace(SettingsHandler h) { onFace_ = std::move(h); }
 
-  // Call every loop().
+  // Call every loop() while station Wi-Fi is up.
   void update(uint32_t nowMs);
 
   bool connected() const { return connected_; }
@@ -50,12 +53,11 @@ class Link {
   AudioHandler onAudio_;
   SettingsHandler onSettings_;
   SettingsHandler onFace_;
-  const char* ssid_ = nullptr;
-  const char* pass_ = nullptr;
   const char* token_ = "";
+  char host_[NET_HOST_MAX + 1]{};
+  uint16_t port_ = 0;
+  bool socketOn_ = false;
   bool connected_ = false;
-  bool wifiReported_ = false;
-  uint32_t wifiDownSinceMs_ = 0;   // when WiFi was last seen down (0 = it is up)
-  uint32_t lastTxCheckMs_ = 0;     // transmit power: last look at the signal
-  bool lowTxPower_ = false;        // turned down because the router is close
+  uint32_t lastTxCheckMs_ = 0;
+  bool lowTxPower_ = false;
 };
