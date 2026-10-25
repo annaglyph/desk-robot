@@ -157,7 +157,8 @@ void printHelp() {
   Serial.println(F("  servo        check the servo PWM timing"));
   Serial.println(F("  temp         chip temperature"));
   Serial.println(F("  loop         slowest time of each part of the main loop since the last `loop`"));
-  Serial.println(F("  wifi         saved networks and join status (names only, no passwords)"));
+  Serial.println(F("  wifi         saved networks, join or setup AP (names only, no passwords)"));
+  Serial.println(F("  wifi forget n  drop saved slot n if it is not last-ok (does not erase chip)"));
   Serial.println(F("  help         this text"));
 }
 
@@ -175,7 +176,14 @@ static void runCommand(String line) {
     printHelp();
   } else if (cmd == "wifi") {
 #if HAVE_BRAIN
-    net.printStatus();
+    if (arg.startsWith("forget")) {
+      String rest = arg.substring(6);
+      rest.trim();
+      if (rest.length() == 0) Serial.println(F("wifi forget <slot>  (will not drop last-ok)"));
+      else net.forgetSlot(rest.toInt());
+    } else {
+      net.printStatus();
+    }
 #else
     Serial.println(F("wifi: USB-only build (no secrets.h)"));
 #endif

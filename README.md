@@ -328,9 +328,10 @@ without settings or server buttons.
    not change.
 
 2. Copy `firmware/include/secrets.h.example` to `secrets.h` in the same
-   folder and fill in your WiFi name and password, that address, and
-   the same `ROBOT_TOKEN` you put in `server/.env`. The ESP32 only sees
-   **2.4 GHz** networks.
+   folder and fill in your WiFi name and password, that address, the same
+   `ROBOT_TOKEN` you put in `server/.env`, and `SETUP_AP_PASS` (8+ characters)
+   for the **Rocky-Setup** access point. The ESP32 only sees **2.4 GHz**
+   networks (not 5 GHz).
 
 3. Flash again with `pio run -t upload` (the default env is `xiao_esp32s3`).
    The first boot copies that Wi-Fi name into flash (NVS). Later uploads keep
@@ -339,6 +340,18 @@ without settings or server buttons.
    once more. Type `wifi` on the USB console for saved names (never passwords).
    The serial console shows `wifi: connected` and then `brain: connected`
    once the server is running.
+
+   To join a **new** 2.4 GHz network without flashing: if Rocky has no saved
+   networks, or cannot join one for about 60 seconds, he starts **Rocky-Setup**.
+   On a phone, join that AP with `SETUP_AP_PASS`, then open
+   http://192.168.4.1 (Safari if iOS does not show a login sheet). Enter the
+   LAN name, password, and brain host. He stores up to four profiles and does
+   not overwrite a different saved network when the list is full. A bad new
+   password is not stored; the last working profile (for example the Mac
+   hotspot) stays last-ok. A network is written to flash only after it
+   associates and gets an IP. The portal does **not** open just because the
+   brain server is stopped. USB `wifi forget <slot>` drops a saved name that
+   is not last-ok; it never erases the chip or the `home` / `face` settings.
 
 From then on the server listens through the robot's microphone and speaks
 through the robot's speaker whenever the robot is connected, and falls back

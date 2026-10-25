@@ -10,6 +10,7 @@ server/.venv/
 
 # Secrets — never commit WiFi or API credentials
 firmware/include/secrets.h
+firmware/test/setup_ap/setup_ap_secrets.h
 .env
 .env.*
 !.env.example

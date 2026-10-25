@@ -4,20 +4,34 @@
 #include <WiFi.h>
 
 #include "config.h"
+#include "setup_portal.h"
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#if !defined(SETUP_AP_PASS) && __has_include("../test/setup_ap/setup_ap_secrets.h")
+#include "../test/setup_ap/setup_ap_secrets.h"
+#endif
 
 Net net;
 
 static const char* kNs = "wifi";  // not "home" (clock) or "face" (pack)
 
+#if defined(SETUP_AP_PASS)
+static_assert(sizeof(SETUP_AP_PASS) > 8, "SETUP_AP_PASS must be at least 8 characters for WPA2");
+#endif
+
 const char* Net::ssid() const {
-  if (joining_ >= 0 && joining_ < count_) return views_[joining_].ssid;
+  if (joining_ >= 0 && joining_ < NET_MAX_PROFILES && views_[joining_].ssid[0]) {
+    return views_[joining_].ssid;
+  }
   if (lastOk_ >= 0 && lastOk_ < count_) return views_[lastOk_].ssid;
   return "";
 }
 
 const char* Net::brainHost() const {
   int i = joining_ >= 0 ? joining_ : lastOk_;
-  if (i >= 0 && i < count_ && host_[i][0]) return host_[i];
+  if (i >= 0 && i < NET_MAX_PROFILES && host_[i][0]) return host_[i];
   return "";
 }
 
@@ -25,9 +39,13 @@ void Net::printStatus() const {
   Serial.printf("wifi: %d profile(s), last-ok %d, %s", count_, lastOk_,
                 phase_ == Phase::Up     ? "up"
                 : phase_ == Phase::Join ? "joining"
-                : phase_ == Phase::Scan ? "scan"
+                : phase_ == Phase::Setup ? "setup"
                                         : "idle");
   if (staUp_) Serial.printf(", ip %s", WiFi.localIP().toString().c_str());
+  if (phase_ == Phase::Setup) {
+    Serial.printf(", ap Rocky-Setup stations %u hits %lu", setupPortal.stations(),
+                  static_cast<unsigned long>(setupPortal.hits()));
+  }
   Serial.println();
   for (int i = 0; i < count_; i++) {
     Serial.printf("  %d %s  brain %s%s\n", i, views_[i].ssid, host_[i][0] ? host_[i] : "(none)",
@@ -69,6 +87,31 @@ void Net::saveMeta() {
   p.end();
 }
 
+static void clearSlotRam(NetProfileView* view, char* pass, char* host) {
+  view->ssid[0] = 0;
+  pass[0] = 0;
+  host[0] = 0;
+}
+
+void Net::forgetSlot(int index) {
+  if (!netCanForget(index, count_, lastOk_)) {
+    Serial.printf("wifi: will not drop slot %d (last-ok %d, count %d)\n", index, lastOk_, count_);
+    return;
+  }
+  Serial.printf("wifi: dropping saved \"%s\" (slot %d)\n", views_[index].ssid, index);
+  for (int i = index; i < count_ - 1; i++) {
+    views_[i] = views_[i + 1];
+    strlcpy(pass_[i], pass_[i + 1], sizeof(pass_[i]));
+    strlcpy(host_[i], host_[i + 1], sizeof(host_[i]));
+    saveProfile(i);
+  }
+  count_--;
+  if (lastOk_ > index) lastOk_--;
+  clearSlotRam(&views_[count_], pass_[count_], host_[count_]);
+  saveProfile(count_);
+  saveMeta();
+}
+
 void Net::saveProfile(int i) {
   if (i < 0 || i >= NET_MAX_PROFILES) return;
   Preferences p;
@@ -102,147 +145,215 @@ void Net::migrateIfNeeded(const char* seedSsid, const char* seedPass, const char
   }
 }
 
+void Net::noteDown(uint32_t nowMs) {
+  if (downSince_ == 0) downSince_ = nowMs ? nowMs : 1;
+}
+
+void Net::noteUp() { downSince_ = 0; }
+
 void Net::begin(const char* seedSsid, const char* seedPass, const char* seedHost, uint16_t seedPort) {
   port_ = seedPort ? seedPort : 8765;
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
-  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   load();
   migrateIfNeeded(seedSsid, seedPass, seedHost);
   Serial.printf("wifi: %d saved network(s)%s\n", count_, migrated_ ? ", nvs migrated" : "");
-  if (count_ == 0) {
-    Serial.println(F("wifi: no saved networks — Stage 3 will add a setup page"));
-    phase_ = Phase::Idle;
+  uint32_t now = millis();
+  noteDown(now);
+  memset(skipped_, 0, sizeof(skipped_));
+  triedAll_ = false;
+  if (netWantSetup(count_, false, 0, WIFI_SETUP_AFTER_MS, false, false, false)) {
+    startSetup();
   } else {
-    // Casey's working path: WiFi.begin the known SSID. Scanning is only used
-    // later to pick among several saved networks; it is not required to join.
-    joinLastSaved(millis());
+    joinNext(now);
   }
 }
 
-void Net::startScan() {
-  joining_ = -1;
+void Net::startJoin(int idx, uint32_t nowMs) {
+  if (idx < 0 || idx >= NET_MAX_PROFILES || !views_[idx].ssid[0]) return;
+  joining_ = idx;
+  phase_ = Phase::Join;
+  phaseAt_ = nowMs ? nowMs : 1;
   staUp_ = false;
-  phase_ = Phase::Scan;
-  phaseAt_ = millis();
-  // scanNetworks already drops the last result. WIFI_SCAN_FAILED (-2) from
-  // scanComplete() also means "not started yet" — do not treat it as done.
-  int started = WiFi.scanNetworks(true);
-  Serial.printf("wifi: scanning (scanNetworks %d, running=%d failed=%d)\n",
-                started, WIFI_SCAN_RUNNING, WIFI_SCAN_FAILED);
+  Serial.printf("wifi: joining \"%s\" (slot %d)...\n", views_[idx].ssid, idx);
+  if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false, false);
+  WiFi.begin(views_[idx].ssid, pass_[idx]);
 }
 
-void Net::onScanDone(uint32_t nowMs) {
-  int nHits = WiFi.scanComplete();
-  NetScanHit hits[16]{};
-  int used = 0;
-  if (nHits > 0) {
-    for (int i = 0; i < nHits && used < 16; i++) {
-      String s = WiFi.SSID(i);
-      if (!s.length()) continue;
-      strlcpy(hits[used].ssid, s.c_str(), sizeof(hits[used].ssid));
-      hits[used].rssi = WiFi.RSSI(i);
-      used++;
-    }
+void Net::joinNext(uint32_t nowMs) {
+  if (count_ <= 0) {
+    startSetup();
+    return;
   }
-  WiFi.scanDelete();
-  Serial.printf("wifi: scan finished %d ap(s), %d named\n", nHits < 0 ? 0 : nHits, used);
-  int pick = netChooseProfile(views_, count_, lastOk_, hits, used, skipped_);
+  int pick = netNextJoin(count_, lastOk_, skipped_);
   if (pick < 0) {
-    Serial.println(F("wifi: scan listed none of our SSIDs"));
-    memset(skipped_, 0, sizeof(skipped_));
-    joinLastSaved(nowMs);
+    triedAll_ = true;
+    Serial.println(F("wifi: tried every saved network this round"));
+    if (netWantSetup(count_, false, nowMs - downSince_, WIFI_SETUP_AFTER_MS, false, false, true)) {
+      Serial.println(F("wifi: saved networks not joined — starting setup AP"));
+      startSetup();
+      return;
+    }
+    phase_ = Phase::Idle;
+    phaseAt_ = nowMs ? nowMs : 1;
     return;
   }
   startJoin(pick, nowMs);
 }
 
-void Net::startJoin(int idx, uint32_t nowMs) {
-  joining_ = idx;
-  phase_ = Phase::Join;
-  phaseAt_ = nowMs ? nowMs : 1;
-  staUp_ = false;
-  Serial.printf("wifi: joining \"%s\"...\n", views_[idx].ssid);
-  WiFi.begin(views_[idx].ssid, pass_[idx]);
-}
-
-void Net::joinLastSaved(uint32_t nowMs) {
-  int idx = lastOk_ >= 0 ? lastOk_ : 0;
-  if (idx < 0 || idx >= count_ || !views_[idx].ssid[0]) {
-    Serial.println(F("wifi: no last saved SSID to join"));
-    phase_ = Phase::Idle;
-    phaseAt_ = nowMs ? nowMs : 1;
+void Net::onJoinLost(uint32_t nowMs) {
+  Serial.printf("wifi: join failed (status %d)\n", static_cast<int>(WiFi.status()));
+  if (fromPortal_) {
+    NetCommitOut done = netCommitPortal({count_, lastOk_, replacing_, portalSlot_, false});
+    if (done.restoreBackup && portalSlot_ >= 0) {
+      strlcpy(pass_[portalSlot_], backupPass_, sizeof(pass_[portalSlot_]));
+      strlcpy(host_[portalSlot_], backupHost_, sizeof(host_[portalSlot_]));
+      Serial.printf("wifi: restored previous settings for \"%s\"\n", views_[portalSlot_].ssid);
+    }
+    if (done.discardNew && portalSlot_ >= 0) {
+      Serial.printf("wifi: discarded unsaved \"%s\"\n", views_[portalSlot_].ssid);
+      clearSlotRam(&views_[portalSlot_], pass_[portalSlot_], host_[portalSlot_]);
+    }
+    fromPortal_ = false;
+    replacing_ = false;
+    portalSlot_ = -1;
+    memset(backupPass_, 0, sizeof(backupPass_));
+    joining_ = -1;
+    staUp_ = false;
+    startSetup();
     return;
   }
-  Serial.printf("wifi: fallback to saved SSID (no scan)\n");
-  startJoin(idx, nowMs);
-}
-
-void Net::onJoinLost(uint32_t nowMs) {
   if (joining_ >= 0 && joining_ < NET_MAX_PROFILES) skipped_[joining_] = true;
-  Serial.printf("wifi: join failed (status %d), trying another saved network\n",
-                static_cast<int>(WiFi.status()));
   joining_ = -1;
   staUp_ = false;
-  if (count_ > 1) {
-    startScan();
+  noteDown(nowMs);
+  joinNext(nowMs);
+}
+
+void Net::startSetup() {
+  joining_ = -1;
+  staUp_ = false;
+  fromPortal_ = false;
+  phase_ = Phase::Setup;
+  phaseAt_ = millis();
+  setupPortal.setKnownSsids(views_, count_);
+  setupPortal.setError(NetPortalErr::Ok);
+#if defined(SETUP_AP_PASS)
+  setupPortal.begin(SETUP_AP_PASS);
+#else
+  setupPortal.begin(nullptr);
+#endif
+}
+
+void Net::stopSetup() {
+  if (setupPortal.running()) setupPortal.stop();
+}
+
+void Net::applyPortalSubmit() {
+  char ssid[NET_SSID_MAX + 1]{};
+  char pass[NET_PASS_MAX + 1]{};
+  char host[NET_HOST_MAX + 1]{};
+  if (!setupPortal.takeSubmit(ssid, pass, host)) return;
+
+  NetPortalErr err = netValidatePortal(ssid, pass, host);
+  if (err != NetPortalErr::Ok) {
+    setupPortal.setError(err);
+    Serial.println(F("wifi: setup form rejected (invalid fields)"));
     return;
   }
+  bool replacing = false;
+  int slot = netPlaceProfile(views_, count_, ssid, &replacing);
+  if (slot < 0) {
+    setupPortal.setError(NetPortalErr::Full);
+    Serial.println(F("wifi: four profiles already saved, not overwriting"));
+    return;
+  }
+
+  replacing_ = replacing;
+  portalSlot_ = slot;
+  if (replacing) {
+    strlcpy(backupPass_, pass_[slot], sizeof(backupPass_));
+    strlcpy(backupHost_, host_[slot], sizeof(backupHost_));
+  } else {
+    memset(backupPass_, 0, sizeof(backupPass_));
+    backupHost_[0] = 0;
+  }
+
+  strlcpy(views_[slot].ssid, ssid, sizeof(views_[slot].ssid));
+  strlcpy(pass_[slot], pass, sizeof(pass_[slot]));
+  strlcpy(host_[slot], host, sizeof(host_[slot]));
+  memset(pass, 0, sizeof(pass));
+  Serial.printf("wifi: trying \"%s\" brain %s (%s, not saved until it joins)\n", ssid, host,
+                replacing ? "update" : "new");
+
+  stopSetup();
+  fromPortal_ = true;
   memset(skipped_, 0, sizeof(skipped_));
-  phase_ = Phase::Idle;
-  phaseAt_ = nowMs ? nowMs : 1;
+  startJoin(slot, millis());
 }
 
 void Net::update(uint32_t nowMs) {
+  if (phase_ == Phase::Setup) {
+    setupPortal.update();
+    applyPortalSubmit();
+    return;
+  }
+
   if (count_ == 0) {
-    if (nowMs - idleLogAt_ > 10000) {
-      idleLogAt_ = nowMs;
-      Serial.println(F("wifi: no saved networks"));
-    }
-    return;
-  }
-
-  if (phase_ == Phase::Idle) {
-    if (nowMs - phaseAt_ >= WIFI_RETRY_MS) joinLastSaved(nowMs);
-    return;
-  }
-
-  if (phase_ == Phase::Scan) {
-    int st = WiFi.scanComplete();
-    if (st == WIFI_SCAN_RUNNING) return;
-    if (st >= 0) {
-      onScanDone(nowMs);
-      return;
-    }
-    // WIFI_SCAN_FAILED (-2) is also "scan not triggered" (Arduino WiFiScan.cpp).
-    if (nowMs - phaseAt_ < WIFI_JOIN_MS) {
-      if (nowMs - idleLogAt_ >= 1000) {
-        idleLogAt_ = nowMs;
-        Serial.printf("wifi: scan wait status %d (running=%d failed=%d) sta %d mode %d\n",
-                      st, WIFI_SCAN_RUNNING, WIFI_SCAN_FAILED,
-                      static_cast<int>(WiFi.status()), static_cast<int>(WiFi.getMode()));
-      }
-      return;
-    }
-    Serial.printf("wifi: scan timed out status %d sta %d mode %d\n",
-                  st, static_cast<int>(WiFi.status()), static_cast<int>(WiFi.getMode()));
-    WiFi.scanDelete();
-    joinLastSaved(nowMs);
+    startSetup();
     return;
   }
 
   bool up = WiFi.status() == WL_CONNECTED;
+  if (up) {
+    noteUp();
+  } else {
+    noteDown(nowMs);
+  }
+
+  if (phase_ == Phase::Idle) {
+    if (netWantSetup(count_, false, nowMs - downSince_, WIFI_SETUP_AFTER_MS, false, false, triedAll_)) {
+      Serial.println(F("wifi: saved networks not joined — starting setup AP"));
+      startSetup();
+      return;
+    }
+    if (nowMs - phaseAt_ >= WIFI_RETRY_MS) {
+      memset(skipped_, 0, sizeof(skipped_));
+      joinNext(nowMs);
+    }
+    return;
+  }
+
   if (phase_ == Phase::Join) {
     if (up) {
       staUp_ = true;
       phase_ = Phase::Up;
-      if (lastOk_ != joining_) {
-        lastOk_ = joining_;
-        saveMeta();
+      if (fromPortal_) {
+        NetCommitOut done = netCommitPortal({count_, lastOk_, replacing_, joining_, true});
+        if (done.writeNvs && joining_ >= 0) {
+          count_ = done.count;
+          lastOk_ = done.lastOk;
+          saveProfile(joining_);
+          saveMeta();
+          Serial.printf("wifi: saved \"%s\" in slot %d\n", views_[joining_].ssid, joining_);
+        }
+      } else {
+        int nextOk = netLastOkAfterJoin(joining_, lastOk_);
+        if (lastOk_ != nextOk) {
+          lastOk_ = nextOk;
+          saveMeta();
+          Serial.printf("wifi: last-ok now slot %d brain %s\n", lastOk_,
+                        host_[lastOk_][0] ? host_[lastOk_] : "(none)");
+        }
       }
+      fromPortal_ = false;
+      replacing_ = false;
+      portalSlot_ = -1;
+      memset(backupPass_, 0, sizeof(backupPass_));
       Serial.printf("wifi: connected, ip %s\n", WiFi.localIP().toString().c_str());
+      triedAll_ = false;
       memset(skipped_, 0, sizeof(skipped_));
       return;
     }
@@ -250,8 +361,6 @@ void Net::update(uint32_t nowMs) {
     return;
   }
 
-  // Up: a short drop is left to the driver; a long one scans again so another
-  // saved network can win. Brain disconnect is not handled here.
   if (up) {
     staUp_ = true;
     return;
@@ -260,10 +369,12 @@ void Net::update(uint32_t nowMs) {
     Serial.println(F("wifi: lost"));
     staUp_ = false;
     phaseAt_ = nowMs ? nowMs : 1;
+    noteDown(nowMs);
+    memset(skipped_, 0, sizeof(skipped_));
+    triedAll_ = false;
   }
   if (nowMs - phaseAt_ >= WIFI_RETRY_MS) {
     joining_ = -1;
-    if (count_ > 1) startScan();
-    else joinLastSaved(nowMs);
+    joinNext(nowMs);
   }
 }
