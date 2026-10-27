@@ -1,5 +1,7 @@
 #include "setup_portal.h"
 
+#include <stdio.h>
+
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -42,26 +44,30 @@ static const char kFormTail[] PROGMEM = R"html(
     <input id="pass" name="pass" type="password" maxlength="64" autocomplete="off">
     <label for="brain">Brain host (IP or name)</label>
     <input id="brain" name="brain" type="text" maxlength="64" placeholder="192.168.1.50" autocomplete="off" required>
-    <p><button type="submit">Save and join</button></p>
+    <p><button type="submit">Test this network</button></p>
   </form>
 </body>
 </html>
 )html";
 
-static const char kThanks[] PROGMEM = R"html(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rocky setup</title>
-</head>
-<body>
-  <h1>Saved</h1>
-  <p>Rocky is trying that network. If it does not join, Rocky-Setup will come back. Earlier networks stay in memory.</p>
-</body>
-</html>
-)html";
+static void sendPendingPage() {
+  char page[768];
+  snprintf(page, sizeof(page),
+           "<!DOCTYPE html>\n"
+           "<html lang=\"en\">\n"
+           "<head>\n"
+           "<meta charset=\"utf-8\">\n"
+           "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+           "<title>Rocky setup</title>\n"
+           "</head>\n"
+           "<body>\n"
+           "<h1>%s</h1>\n"
+           "<p>%s</p>\n"
+           "</body>\n"
+           "</html>\n",
+           netPortalPendingTitle(), netPortalPendingBody());
+  http.send(200, "text/html", page);
+}
 
 void SetupPortal::setKnownSsids(const NetProfileView* views, int count) {
   knownCount_ = 0;
@@ -107,8 +113,10 @@ void SetupPortal::serveForm() {
   if (knownCount_ > 0) {
     html += F("<p class=\"note\">Already saved:");
     for (int i = 0; i < knownCount_; i++) {
+      char shown[NET_SSID_MAX * 6 + 1];
+      if (!netHtmlEscape(shown, sizeof(shown), known_[i])) continue;
       html += ' ';
-      html += known_[i];
+      html += shown;
     }
     html += F("</p>");
   }
@@ -132,7 +140,7 @@ void SetupPortal::serveThanks() {
   strlcpy(host_, host.c_str(), sizeof(host_));
   haveSubmit_ = true;
   err_ = NetPortalErr::Ok;
-  http.send_P(200, "text/html", kThanks);
+  sendPendingPage();
 }
 
 void SetupPortal::attachRoutes() {

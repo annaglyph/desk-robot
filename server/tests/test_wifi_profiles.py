@@ -10,6 +10,18 @@ SRC = ROOT / "firmware" / "test" / "net_policy_host.cpp"
 
 
 class WifiProfilePolicyTests(unittest.TestCase):
+    def test_stage_3b1_call_sites(self):
+        portal = (ROOT / "firmware" / "src" / "setup_portal.cpp").read_text(encoding="utf-8")
+        main = (ROOT / "firmware" / "src" / "main.cpp").read_text(encoding="utf-8")
+        net = (ROOT / "firmware" / "src" / "net.cpp").read_text(encoding="utf-8")
+        self.assertIn("netHtmlEscape", portal)
+        self.assertIn("netPortalPendingTitle()", portal)
+        self.assertNotIn("<h1>Saved</h1>", portal)
+        self.assertIn("netDecideForget", main)
+        self.assertNotIn("forgetSlot(rest.toInt())", main)
+        self.assertIn("netIdleDecision", net)
+        self.assertIn("staLive()", net)
+
     def test_host_policy_binary(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "net_policy_host"

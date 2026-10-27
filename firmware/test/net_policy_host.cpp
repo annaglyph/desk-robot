@@ -129,6 +129,124 @@ int main() {
   if (netCanForget(0, 4, 0)) fail("must not drop last-ok");
   if (!netCanForget(1, 4, 0) || !netCanForget(3, 4, 0)) fail("non last-ok slots may be dropped by hand");
 
+  NetProfileView saved[2] = {P("Rocky-Test"), P("The_Octopod_EXT_2G")};
+  if (netAdoptSlot(saved, 2, "The_Octopod_EXT_2G", 0) != 1)
+    fail("late assoc: reported SSID names the profile even if joining_ was cleared");
+  if (netAdoptSlot(saved, 2, "", 1) != 1)
+    fail("late assoc: empty SSID uses the attempt still in flight");
+  if (netAdoptSlot(saved, 2, "Other", 1) != -1)
+    fail("late assoc: an unknown SSID must not guess a slot");
+  if (netAdoptSlot(saved, 2, "", -1) != -1) fail("late assoc: nothing to name");
+  if (netAdoptSlot(saved, 2, "", 4) != -1) fail("late assoc: pending slot past the list is ignored");
+
+  NetIdleIn idle{};
+  idle.count = 2;
+  idle.setupAfterMs = 60000;
+  idle.retryAfterMs = 20000;
+  idle.triedAll = true;
+  idle.downForMs = 0xFFFFFFF0u;
+  idle.idleForMs = 20000;
+  idle.associated = true;
+  idle.hasIp = true;
+  idle.adoptSlot = 1;
+  NetIdleOut idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Adopt || idleOut.slot != 1)
+    fail("late assoc: station with an IP is adopted, not sent to setup");
+
+  idle.hasIp = false;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Wait)
+    fail("associated without an IP must not open setup or start another begin");
+
+  idle.associated = false;
+  idle.hasIp = false;
+  idle.downForMs = 60000;
+  idle.idleForMs = 20000;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Setup)
+    fail("full round and 60s still opens setup when the station is down");
+
+  idle.downForMs = 10000;
+  idle.idleForMs = 0;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Wait)
+    fail("full round before 60s keeps waiting");
+
+  idle.idleForMs = 20000;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Retry)
+    fail("station down after the retry interval tries the next round");
+
+  idle.triedAll = false;
+  idle.downForMs = 120000;
+  idle.idleForMs = 20000;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Retry)
+    fail("60s without a finished round must not open setup");
+
+  idle.triedAll = true;
+  idle.associated = true;
+  idle.hasIp = true;
+  idle.downForMs = 0;
+  idleOut = netIdleDecision(idle);
+  if (idleOut.action != NetIdleAction::Adopt)
+    fail("a live station is adopted even when the down-timer was cleared");
+
+  auto forget = [](const char* text, int count, int lastOk) {
+    return netDecideForget(text, count, lastOk);
+  };
+  NetForgetDecision f = forget("", 4, 0);
+  if (f.result != NetForgetResult::Missing) fail("forget: empty argument");
+  f = forget(nullptr, 4, 0);
+  if (f.result != NetForgetResult::Missing) fail("forget: missing argument");
+  f = forget("abc", 4, 0);
+  if (f.result != NetForgetResult::Bad || f.slot == 0) fail("forget: abc must not become slot 0");
+  f = forget("1abc", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: trailing junk");
+  f = forget("-1", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: negative");
+  f = forget("+1", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: plus sign");
+  f = forget("1 ", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: trailing space");
+  f = forget("2147483648", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: overflow");
+  f = forget("99999999999999999999", 4, 0);
+  if (f.result != NetForgetResult::Bad) fail("forget: oversized integer");
+  f = forget("0", 4, 0);
+  if (f.result != NetForgetResult::LastOk || f.slot != 0) fail("forget: last-ok stays protected");
+  f = forget("1", 4, 0);
+  if (f.result != NetForgetResult::Drop || f.slot != 1) fail("forget: valid non-last-ok slot");
+  f = forget("3", 4, 0);
+  if (f.result != NetForgetResult::Drop || f.slot != 3) fail("forget: last valid slot");
+  f = forget("4", 4, 0);
+  if (f.result != NetForgetResult::OutOfRange) fail("forget: out of range");
+  f = forget("01", 4, 0);
+  if (f.result != NetForgetResult::Drop || f.slot != 1) fail("forget: leading zero is that slot, not slot 0");
+
+  char raw[] = "A&B";
+  char escaped[160];
+  if (!netHtmlEscape(escaped, sizeof(escaped), raw) || strcmp(raw, "A&B") != 0)
+    fail("escape must not rewrite the stored SSID");
+  if (strcmp(escaped, "A&amp;B") != 0) fail("escape ampersand");
+  if (!netHtmlEscape(escaped, sizeof(escaped), "a<b>c\"d'e/f") ||
+      strcmp(escaped, "a&lt;b&gt;c&quot;d&#39;e/f") != 0)
+    fail("escape angles, quotes, and leave a slash as text");
+  if (!netHtmlEscape(escaped, sizeof(escaped), "Rocky-Test") || strcmp(escaped, "Rocky-Test") != 0)
+    fail("plain SSID is unchanged on the page");
+  char tiny[4];
+  if (netHtmlEscape(tiny, sizeof(tiny), "<img>")) fail("escape must not truncate an entity");
+  if (tiny[0] != '\0') fail("failed escape must not leave a partial entity");
+
+  if (strcmp(netPortalPendingTitle(), "Saved") == 0) fail("submit page must not say Saved");
+  if (!strstr(netPortalPendingTitle(), "Connecting")) fail("submit page says we are connecting");
+  const char* body = netPortalPendingBody();
+  if (!strstr(body, "only after it connects")) fail("submit page: save only after connect");
+  if (!strstr(body, "disconnect from Rocky-Setup")) fail("submit page: phone may leave the setup AP");
+  if (!strstr(body, "come back")) fail("submit page: failed attempt returns to the portal");
+  if (strstr(body, "ROBOT_TOKEN") || strstr(netPortalPendingTitle(), "password"))
+    fail("submit page must not mention secrets");
+
   printf("ok\n");
   return 0;
 }

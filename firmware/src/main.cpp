@@ -179,8 +179,20 @@ static void runCommand(String line) {
     if (arg.startsWith("forget")) {
       String rest = arg.substring(6);
       rest.trim();
-      if (rest.length() == 0) Serial.println(F("wifi forget <slot>  (will not drop last-ok)"));
-      else net.forgetSlot(rest.toInt());
+      NetForgetDecision d = netDecideForget(rest.c_str(), net.count(), net.lastOk());
+      if (d.result == NetForgetResult::Drop) {
+        net.forgetSlot(d.slot);
+      } else if (d.result == NetForgetResult::Missing) {
+        Serial.println(F("wifi forget <slot>  (will not drop last-ok)"));
+      } else if (d.result == NetForgetResult::LastOk) {
+        Serial.printf("wifi: will not drop slot %d (last-ok %d, count %d)\n", d.slot, net.lastOk(),
+                      net.count());
+      } else if (d.result == NetForgetResult::OutOfRange) {
+        Serial.printf("wifi: slot %d is not a saved network (%d profile%s)\n", d.slot, net.count(),
+                      net.count() == 1 ? "" : "s");
+      } else {
+        Serial.println(F("wifi: forget needs a whole number, for example: wifi forget 1"));
+      }
     } else {
       net.printStatus();
     }

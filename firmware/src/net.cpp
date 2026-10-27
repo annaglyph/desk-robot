@@ -151,6 +151,42 @@ void Net::noteDown(uint32_t nowMs) {
 
 void Net::noteUp() { downSince_ = 0; }
 
+bool Net::staLive() const {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  return static_cast<uint32_t>(WiFi.localIP()) != 0;
+}
+
+int Net::liveSlot() const {
+  String ssid = WiFi.SSID();
+  return netAdoptSlot(views_, count_, ssid.c_str(), pendingSlot_);
+}
+
+void Net::adoptStation(int slot) {
+  pendingSlot_ = -1;
+  joining_ = slot;
+  staUp_ = true;
+  phase_ = Phase::Up;
+  triedAll_ = false;
+  memset(skipped_, 0, sizeof(skipped_));
+  noteUp();
+  fromPortal_ = false;
+  replacing_ = false;
+  portalSlot_ = -1;
+  memset(backupPass_, 0, sizeof(backupPass_));
+  if (slot >= 0) {
+    int nextOk = netLastOkAfterJoin(slot, lastOk_);
+    if (lastOk_ != nextOk) {
+      lastOk_ = nextOk;
+      saveMeta();
+      Serial.printf("wifi: last-ok now slot %d brain %s\n", lastOk_,
+                    host_[lastOk_][0] ? host_[lastOk_] : "(none)");
+    }
+  } else {
+    Serial.println(F("wifi: connected, saved profile not identified — previous brain host kept"));
+  }
+  Serial.printf("wifi: connected, ip %s\n", WiFi.localIP().toString().c_str());
+}
+
 void Net::begin(const char* seedSsid, const char* seedPass, const char* seedHost, uint16_t seedPort) {
   port_ = seedPort ? seedPort : 8765;
   WiFi.persistent(false);
@@ -172,6 +208,7 @@ void Net::begin(const char* seedSsid, const char* seedPass, const char* seedHost
 
 void Net::startJoin(int idx, uint32_t nowMs) {
   if (idx < 0 || idx >= NET_MAX_PROFILES || !views_[idx].ssid[0]) return;
+  pendingSlot_ = idx;
   joining_ = idx;
   phase_ = Phase::Join;
   phaseAt_ = nowMs ? nowMs : 1;
@@ -183,6 +220,10 @@ void Net::startJoin(int idx, uint32_t nowMs) {
 }
 
 void Net::joinNext(uint32_t nowMs) {
+  if (staLive()) {
+    adoptStation(liveSlot());
+    return;
+  }
   if (count_ <= 0) {
     startSetup();
     return;
@@ -191,7 +232,8 @@ void Net::joinNext(uint32_t nowMs) {
   if (pick < 0) {
     triedAll_ = true;
     Serial.println(F("wifi: tried every saved network this round"));
-    if (netWantSetup(count_, false, nowMs - downSince_, WIFI_SETUP_AFTER_MS, false, false, true)) {
+    uint32_t downFor = downSince_ == 0 ? 0 : nowMs - downSince_;
+    if (netWantSetup(count_, false, downFor, WIFI_SETUP_AFTER_MS, false, false, true)) {
       Serial.println(F("wifi: saved networks not joined — starting setup AP"));
       startSetup();
       return;
@@ -233,6 +275,11 @@ void Net::onJoinLost(uint32_t nowMs) {
 }
 
 void Net::startSetup() {
+  if (staLive()) {
+    adoptStation(liveSlot());
+    return;
+  }
+  pendingSlot_ = -1;
   joining_ = -1;
   staUp_ = false;
   fromPortal_ = false;
@@ -302,7 +349,8 @@ void Net::update(uint32_t nowMs) {
   }
 
   if (count_ == 0) {
-    startSetup();
+    if (staLive()) adoptStation(liveSlot());
+    else startSetup();
     return;
   }
 
@@ -314,12 +362,31 @@ void Net::update(uint32_t nowMs) {
   }
 
   if (phase_ == Phase::Idle) {
-    if (netWantSetup(count_, false, nowMs - downSince_, WIFI_SETUP_AFTER_MS, false, false, triedAll_)) {
+    // A join can be marked failed at 20 s and still associate in this gap.
+    // downSince_ is 0 once noteUp() has run, so do not treat that as "down for millis()".
+    bool hasIp = up && static_cast<uint32_t>(WiFi.localIP()) != 0;
+    uint32_t downFor = (!up && downSince_ != 0) ? nowMs - downSince_ : 0;
+    NetIdleIn din{};
+    din.associated = up;
+    din.hasIp = hasIp;
+    din.adoptSlot = up ? liveSlot() : -1;
+    din.count = count_;
+    din.downForMs = downFor;
+    din.setupAfterMs = WIFI_SETUP_AFTER_MS;
+    din.idleForMs = phaseAt_ == 0 ? 0 : nowMs - phaseAt_;
+    din.retryAfterMs = WIFI_RETRY_MS;
+    din.triedAll = triedAll_;
+    NetIdleOut dec = netIdleDecision(din);
+    if (dec.action == NetIdleAction::Adopt) {
+      adoptStation(dec.slot);
+      return;
+    }
+    if (dec.action == NetIdleAction::Setup) {
       Serial.println(F("wifi: saved networks not joined — starting setup AP"));
       startSetup();
       return;
     }
-    if (nowMs - phaseAt_ >= WIFI_RETRY_MS) {
+    if (dec.action == NetIdleAction::Retry) {
       memset(skipped_, 0, sizeof(skipped_));
       joinNext(nowMs);
     }
@@ -351,6 +418,7 @@ void Net::update(uint32_t nowMs) {
       fromPortal_ = false;
       replacing_ = false;
       portalSlot_ = -1;
+      pendingSlot_ = -1;
       memset(backupPass_, 0, sizeof(backupPass_));
       Serial.printf("wifi: connected, ip %s\n", WiFi.localIP().toString().c_str());
       triedAll_ = false;

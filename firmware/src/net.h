@@ -41,6 +41,9 @@ class Net {
   void applyPortalSubmit();
   void noteDown(uint32_t nowMs);
   void noteUp();
+  bool staLive() const;
+  int liveSlot() const;
+  void adoptStation(int slot);
 
   NetProfileView views_[NET_MAX_PROFILES]{};
   char pass_[NET_MAX_PROFILES][NET_PASS_MAX + 1]{};
@@ -61,6 +64,7 @@ class Net {
   uint32_t phaseAt_ = 0;
   uint32_t downSince_ = 0;
   bool triedAll_ = false;
+  int pendingSlot_ = -1;  // last WiFi.begin, kept after a timeout so a late assoc can be named
 };
 
 extern Net net;
