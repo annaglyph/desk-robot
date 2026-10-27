@@ -265,12 +265,12 @@
   .faces.plain button { padding: 8px 6px; font: 600 12px var(--body); letter-spacing: .04em; color: var(--ink); }
   .faces.plain button.active { --bg: var(--amber); --fg: var(--void); }
 
-  input[type=text], input[type=search], input[type=time], select {
+  input[type=text], input[type=search], input[type=password], input[type=time], select {
     font: 14px var(--body); color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: 3px; padding: 8px 10px;
     transition: border-color .15s, box-shadow .15s; }
-  input[type=text]:focus, input[type=search]:focus, input[type=time]:focus, select:focus, textarea:focus {
+  input[type=text]:focus, input[type=search]:focus, input[type=password]:focus, input[type=time]:focus, select:focus, textarea:focus {
     outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(242,180,92,.14), 0 0 14px rgba(242,180,92,.12); }
-  input[type=text], input[type=search] { flex: 1; min-width: 120px; }
+  input[type=text], input[type=search], input[type=password] { flex: 1; min-width: 120px; }
   input::placeholder, textarea::placeholder { color: var(--muted); }
   .hint { margin: 6px 0 0; font: 12px var(--body); color: var(--muted); }
 
@@ -311,6 +311,14 @@
   .saved.ok::before { content: "✓ "; }
   .results { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
   .results button { width: 100%; text-align: left; font-weight: 400; }
+  /* Home Assistant: one row per allowed name, or per entity found */
+  .halist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+  .halist li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .halist li:last-child { border-bottom: 0; }
+  .halist .n { font: 13px var(--mono); color: var(--amber); overflow-wrap: anywhere; }
+  .halist .e { font: 12px var(--mono); color: var(--muted); flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+  .halist button { padding: 4px 10px; font-weight: 400; }
+  .halist li.hint { display: block; border: 0; }
   .here { font: 13px var(--mono); color: var(--amber); }
   details.adv { margin-top: 18px; }
   details.adv > summary { cursor: pointer; font: 600 10px var(--display); letter-spacing: .28em; text-transform: uppercase; color: var(--muted); padding: 6px 0;
@@ -715,6 +723,45 @@
           <fieldset class="set"><legend class="k">Camera stream</legend>
             <div class="choices"><label><input type="radio" name="vision.stream" value="vga"> Sharp (640×480)</label>
               <label><input type="radio" name="vision.stream" value="qvga"> Light (320×240, less WiFi)</label></div></fieldset>
+        </fieldset>
+
+        <fieldset class="card" id="hacard">
+          <legend class="label"><span>Home Assistant</span><span class="saved" data-saved="home_assistant"></span></legend>
+          <div class="set"><label class="check"><input type="checkbox" name="home_assistant.enabled" aria-describedby="hahint"> Let <span data-robot-name>{name}</span> use Home Assistant</label>
+            <p class="hint" id="hahint">He can read only the entities you list below, and turn only the lights you list on or off. Nothing else in your home. Anyone talking near him can ask too, so switch it off when that matters.</p></div>
+          <div class="set"><label class="k" for="haurl">Address</label>
+            <input type="text" id="haurl" name="home_assistant.url" maxlength="200" placeholder="http://homeassistant.local:8123" autocomplete="off" spellcheck="false">
+            <label class="k" for="hatoken">Token</label>
+            <div class="row"><input type="password" id="hatoken" maxlength="4096" autocomplete="new-password" spellcheck="false" placeholder="paste a long-lived access token" aria-describedby="hatokenhint">
+              <button type="button" id="hatokensave">Save token</button>
+              <button type="button" id="hatokenclear" class="astro">Clear</button></div>
+            <p class="hint" id="hatokenhint">—</p>
+            <div class="row"><button type="button" id="hatest">Test connection</button><span class="hint" id="hastatus" role="status" style="margin:0"></span></div></div>
+          <div class="set"><span class="k">He may read <span id="hareadcount"></span></span>
+            <ul class="halist" id="hareadlist" aria-live="polite"></ul></div>
+          <div class="set"><span class="k">He may turn on and off <span id="halightcount"></span></span>
+            <ul class="halist" id="halightlist" aria-live="polite"></ul>
+            <p class="hint">Separate from reading: a reading never lets him switch anything. Only lights and switches.</p>
+            <p class="hint warn" id="hamismatch" hidden></p></div>
+          <div class="set" id="haeditor" hidden>
+            <span class="k" id="haedittitle">Add</span>
+            <p class="hint" id="haeditwhat" style="margin:0"></p>
+            <div class="row"><input type="text" id="haname" maxlength="64" autocomplete="off" spellcheck="false" placeholder="the name he'll use, like pool_temperature" aria-describedby="haedithint">
+              <select id="hakind" aria-label="Kind of reading"><option value="number">number</option><option value="text">text</option></select></div>
+            <div class="row"><button type="button" id="haeditsave" class="primary">Add</button><button type="button" id="haeditcancel">Cancel</button></div>
+            <p class="hint" id="haedithint">Lowercase words joined by underscores. Say it to him with spaces: "pool temperature". Number for a value like 21.5, text for words like idle.</p></div>
+          <div class="set"><label class="k" for="haq">Find an entity</label>
+            <div class="row"><input type="search" id="haq" autocomplete="off" spellcheck="false" placeholder="name or entity id">
+              <select id="hafor" aria-label="Which entities"><option value="read">Everything</option><option value="control">Lights and switches</option></select>
+              <button type="button" id="hago">Search</button></div>
+            <p class="hint">Asks Home Assistant for its list. Nothing is allowed until you press Add.</p>
+            <ul class="halist" id="haresults" aria-live="polite"></ul></div>
+          <details class="set"><summary class="k">Edit as text</summary>
+            <label class="k" for="hareadings">Readings</label>
+            <textarea id="hareadings" name="home_assistant.readings" rows="4" maxlength="6000" spellcheck="false" placeholder="pool_temperature = number:sensor.pool_temperature"></textarea>
+            <label class="k" for="halights">Lights</label>
+            <textarea id="halights" name="home_assistant.lights" rows="2" maxlength="1500" spellcheck="false" placeholder="desk_lamp = light:switch.desk_lamp"></textarea>
+            <p class="hint">One per line. Readings: a name, =, then number: or text: and the entity id (at most 32). Lights: a name, =, then light: and a light or switch entity id (at most 8).</p></details>
         </fieldset>
       </div>
 
@@ -1754,6 +1801,7 @@ const FaceKit = (() => {
       if (el.type === "range") { showOutput(el); paintRange(el); }
     }
     fillMic(s);
+    renderHA(s);
     const w = s.weather;
     $("here").textContent = w.lat != null ? (w.location || `${w.lat.toFixed(2)}, ${w.lon.toFixed(2)}`) : "not set: no weather on the clock";
     $("placeclear").hidden = w.lat == null;
@@ -1896,6 +1944,165 @@ const FaceKit = (() => {
       }
     } catch (e) { list.innerHTML = ""; toast(e.message, true); }
   };
+
+  // Home Assistant: the two allow-lists are text lines (home_assistant.readings / .lights), shown here as rows. Add,
+  // Edit and Remove rewrite the lines and save them; the launcher checks them again. Finding an entity adds nothing.
+  const HA_NAME = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/, HA_MAX = { readings: 32, lights: 8 };
+  let haEditing = null;   // { list, index (-1 = new), entity }
+  function haParse(text) {
+    return (text || "").split("\n").map(l => l.trim()).filter(Boolean).map(raw => {
+      const i = raw.indexOf("=");
+      return i < 0 ? { name: "", value: "", raw } : { name: raw.slice(0, i).trim(), value: raw.slice(i + 1).trim(), raw };
+    });
+  }
+  function haEntity(value) {
+    const m = /^(number|text|light):(.*)$/.exec(value);
+    return m ? { kind: m[1], entity: m[2].trim() } : { kind: "number", entity: value };
+  }
+  function haButton(text, onclick) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.onclick = onclick;
+    return b;
+  }
+  function haNote(text, warn) {
+    const li = document.createElement("li");
+    li.className = "hint" + (warn ? " warn" : ""); li.textContent = text;
+    return li;
+  }
+  function haSave(list, rows) {
+    const text = rows.map(r => r.raw).join("\n");
+    $(list === "readings" ? "hareadings" : "halights").value = text;
+    return save({ home_assistant: { [list]: text } }, "home_assistant");
+  }
+  function haRows(id, list, rows) {
+    const ul = $(id);
+    ul.replaceChildren();
+    if (!rows.length) { ul.append(haNote("None yet. Find an entity below and press Add.")); return; }
+    rows.forEach((r, i) => {
+      const li = document.createElement("li"), n = document.createElement("span"), e = document.createElement("span");
+      const { kind, entity } = haEntity(r.value);
+      n.className = "n"; n.textContent = r.name || r.raw;
+      e.className = "e"; e.textContent = list === "readings" ? `${entity} · ${kind}` : entity;
+      const del = haButton("Remove", () => haSave(list, rows.filter((_, j) => j !== i)));
+      del.classList.add("astro");
+      li.append(n, e, haButton("Edit", () => haEdit(list, i)), del);
+      ul.append(li);
+    });
+  }
+  function renderHA(s) {
+    const h = s.home_assistant, saved = !!cfg.home_assistant_token;
+    $("hatokenhint").textContent = saved
+      ? "A token is saved (it's never shown). Paste a new one to replace it."
+      : "No token yet. In Home Assistant: your profile → Security → Long-lived access tokens → Create token. It's kept in server/home_assistant.token on this computer, not in the settings.";
+    $("hatokenclear").hidden = !saved;
+    const reads = haParse(h.readings), lights = haParse(h.lights);
+    haRows("hareadlist", "readings", reads);
+    haRows("halightlist", "lights", lights);
+    $("hareadcount").textContent = `(${reads.length} of ${HA_MAX.readings})`;
+    $("halightcount").textContent = `(${lights.length} of ${HA_MAX.lights})`;
+    const readEntity = new Map(reads.map(r => [r.name, haEntity(r.value).entity]));
+    const odd = lights.filter(l => readEntity.has(l.name) && readEntity.get(l.name) !== haEntity(l.value).entity).map(l => l.name);
+    $("hamismatch").hidden = !odd.length;
+    $("hamismatch").textContent = odd.length ? `${odd.join(", ")}: the reading and the light point at different entities.` : "";
+  }
+  function haSuggest(text) {
+    return (text || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^[_0-9]+/, "").slice(0, 64).replace(/_+$/, "");
+  }
+  function haOpen(list, index, entity, name, kind) {
+    haEditing = { list, index, entity };
+    $("haeditor").hidden = false;
+    $("haedittitle").textContent = (index < 0 ? "Add " : "Edit ") + (list === "readings" ? "a reading" : "a light");
+    $("haeditwhat").textContent = entity;
+    $("haname").value = name;
+    $("hakind").value = kind || "number";
+    $("hakind").hidden = list !== "readings";
+    $("haeditsave").textContent = index < 0 ? "Add" : "Save";
+    $("haname").focus();
+  }
+  function haEdit(list, i) {
+    const field = list === "readings" ? "hareadings" : "halights";
+    const r = haParse($(field).value)[i], { kind, entity } = haEntity(r.value);
+    haOpen(list, i, entity, r.name, kind);
+  }
+  function haClose() { haEditing = null; $("haeditor").hidden = true; }
+  $("haeditcancel").onclick = haClose;
+  $("haeditsave").onclick = async () => {
+    if (!haEditing) return;
+    // not `name`: the launcher replaces every "{name}" in this page with the robot's name, template literals included
+    const { list, index, entity } = haEditing, label = $("haname").value.trim();
+    const field = list === "readings" ? "hareadings" : "halights";
+    const rows = haParse($(field).value);
+    if (!HA_NAME.test(label) || label.length > 64) return toast("A name is lowercase words joined by underscores, like pool_temperature", true);
+    if (rows.some((r, j) => j !== index && r.name === label)) return toast(`${label} is already on that list`, true);
+    if (index < 0 && rows.length >= HA_MAX[list]) return toast(`At most ${HA_MAX[list]} ${list === "readings" ? "readings" : "lights"}`, true);
+    const value = list === "readings" ? `${$("hakind").value}:${entity}` : `light:${entity}`;
+    const row = { name: label, value, raw: `${label} = ${value}` };
+    if (index < 0) rows.push(row); else rows[index] = row;
+    haClose();
+    await haSave(list, rows);
+  };
+  $("haname").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); $("haeditsave").click(); } });
+  async function haUrlSaved() {   // the test and the search use the saved address: save one just typed first
+    const v = $("haurl").value.trim();
+    if (cfg && v !== (cfg.settings.home_assistant.url || "")) await save({ home_assistant: { url: v } }, "home_assistant");
+  }
+  $("hatokensave").onclick = async () => {
+    const v = $("hatoken").value.trim();
+    if (!v) return toast("Paste a token first", true);
+    try {
+      const j = await post("/launcher/home_assistant/token", { token: v });
+      $("hatoken").value = "";
+      cfg.home_assistant_token = j.token_set;
+      renderHA(cfg.settings);
+      $("hastatus").textContent = "";
+      toast(j.applied_live || !server.running ? "Token saved" : "Token saved · applies when the server runs");
+    } catch (e) { toast(e.message, true); }
+  };
+  $("hatoken").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); $("hatokensave").click(); } });
+  $("hatokenclear").onclick = async () => {
+    if (!confirm("Clear the saved Home Assistant token? He can't read or switch anything until you paste a new one.")) return;
+    try {
+      const j = await post("/launcher/home_assistant/token", { clear: true });
+      cfg.home_assistant_token = j.token_set;
+      renderHA(cfg.settings);
+      $("hastatus").textContent = "";
+      toast("Token cleared");
+    } catch (e) { toast(e.message, true); }
+  };
+  $("hatest").onclick = async () => {
+    const st = $("hastatus");
+    st.classList.remove("warn"); st.textContent = "Testing…";
+    try {
+      await haUrlSaved();
+      const j = await post("/launcher/home_assistant/test", {});
+      st.textContent = j.ok ? "Connected: Home Assistant accepted the token." : j.message;
+      st.classList.toggle("warn", !j.ok);
+    } catch (e) { st.textContent = e.message; st.classList.add("warn"); }
+  };
+  async function haSearch() {
+    const ul = $("haresults");
+    ul.replaceChildren(haNote("Asking Home Assistant…"));
+    try {
+      await haUrlSaved();
+      const j = await post("/launcher/home_assistant/entities", { q: $("haq").value, for: $("hafor").value });
+      ul.replaceChildren();
+      if (!j.ok) { ul.append(haNote(j.message, true)); return; }
+      if (!j.entities.length) { ul.append(haNote("Nothing matches. Try another word.")); return; }
+      for (const e of j.entities) {
+        const li = document.createElement("li"), n = document.createElement("span"), m = document.createElement("span");
+        const suggested = haSuggest(e.name || e.entity_id.split(".").slice(1).join("_"));
+        n.className = "n"; n.textContent = e.name || e.entity_id;
+        m.className = "e"; m.textContent = `${e.entity_id} · ${e.state}${e.unit ? " " + e.unit : ""}`;
+        li.append(n, m, haButton("Add as reading", () =>
+          haOpen("readings", -1, e.entity_id, suggested, /^[+-]?\d+(\.\d+)?$/.test(e.state) ? "number" : "text")));
+        if (e.controllable) li.append(haButton("Add as light", () => haOpen("lights", -1, e.entity_id, suggested)));
+        ul.append(li);
+      }
+      if (j.matched > j.entities.length) ul.append(haNote(`Showing ${j.entities.length} of ${j.matched}. Type more to narrow it down.`));
+    } catch (e) { ul.replaceChildren(); toast(e.message, true); }
+  }
+  $("hago").onclick = haSearch;
+  $("haq").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); haSearch(); } });
 
   // ── faces ──────────────────────────────────────────────────────────────
   const FIELDS = [

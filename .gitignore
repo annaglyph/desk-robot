@@ -20,6 +20,9 @@ server/personal_context.txt
 
 # Dashboard settings: personal (your location, your name)
 server/settings.json
+# Home Assistant token, written by the dashboard (owner-only); and its temp file while it's replaced
+server/home_assistant.token
+server/.home_assistant-*.token
 # Perception models: downloaded on first run (brain/perception.py), pinned and checksummed
 server/models/*.task
 server/models/rfdetr_*.onnx

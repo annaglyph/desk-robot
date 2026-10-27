@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import computer
+from . import computer, home_assistant, home_control
 
 PATH = Path(__file__).resolve().parent.parent / "settings.json"
 
@@ -84,6 +84,14 @@ SCHEMA: dict[str, dict[str, tuple]] = {
         "shortcuts":     ("", "str", 1000),               # Apple Shortcuts he may run, comma or line separated
         "confirm_shortcuts": (True, "bool", None),        # ask "Run X?" and wait for a yes first
     },
+    # What Rocky may read and switch in Home Assistant (brain/home.py). Off until you switch it on. The token is not
+    # here: it's in server/home_assistant.token, because the dashboard is sent this whole file.
+    "home_assistant": {
+        "enabled":       (False, "bool", None),
+        "url":           ("", "str", 200),                # http://homeassistant.local:8123
+        "readings":      ("", "str", 6000),               # "pool_temperature = number:sensor.pool_temp" per line, ≤ 32
+        "lights":        ("", "str", 1500),               # "desk_lamp = light:switch.desk_lamp" per line, ≤ 8
+    },
     # Listening and voice tuning (the dashboard's Advanced section); None = the default in config.py
     "listening": {
         "VAD_THRESHOLD":    (None, "float", (0.1, 0.95)),
@@ -147,6 +155,12 @@ def clean_value(section: str, key: str, value):
             raise ValueError("a face pack id is lowercase letters, digits and dashes")
         if section == "computer" and key == "bookmarks":
             computer.parse_bookmarks(value)   # raises ValueError naming the bad line
+        if section == "home_assistant" and key == "url":
+            home_assistant.check_url(value)
+        if section == "home_assistant" and key == "readings":
+            home_assistant.readings_from_text(value)   # raises ValueError naming the bad line (never its value)
+        if section == "home_assistant" and key == "lights":
+            home_control.controls_from_text(value)
         return value
     raise ValueError(f"{key}: unknown kind {kind}")
 

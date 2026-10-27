@@ -34,7 +34,7 @@ sys.path.insert(0, str(HERE))
 # The environment as this was started, before brain.config copies server/.env into it. Each brain gets this one,
 # so it reads .env itself, fresh: with the copy, a key changed in .env stayed the old one until the launcher restarted.
 LAUNCH_ENV = dict(os.environ)
-from brain import characters, config, faces, settings  # noqa: E402  (all standard-library only)
+from brain import characters, config, faces, home, home_assistant, home_control, settings  # noqa: E402  (all standard-library only)
 
 PORT = int(os.environ.get("ROCKY_DASHBOARD_PORT", "8766"))
 BIND = "127.0.0.1"
@@ -210,6 +210,42 @@ def spotify_key_set() -> bool:
     return bool(env_value("SPOTIFY_CLIENT_ID") and env_value("SPOTIFY_CLIENT_SECRET"))
 
 
+# What the Home Assistant card says for each failure of a test or a search. Nothing from Home Assistant's reply.
+HA_MESSAGES = {
+    "not_configured": "Set the URL and save a token first.",
+    "authentication_failed": "Home Assistant rejected the token (401 or 403).",
+    "connection_failed": "Couldn't reach that address.",
+    "timeout": "Home Assistant didn't answer in time.",
+    "request_failed": "Home Assistant answered with an error.",
+    "invalid_response": "Home Assistant's answer couldn't be read.",
+}
+HA_SHOWN = 50   # entities listed per search
+
+
+def ha_result(result: dict) -> dict:
+    if result.get("ok"):
+        return result
+    error = result.get("error") if result.get("error") in HA_MESSAGES else "request_failed"
+    return {"ok": False, "error": error, "message": HA_MESSAGES[error]}
+
+
+def ha_entities(query: str, purpose: str) -> dict:
+    """Search Home Assistant's entities for the card (saved URL and token only). Shows; never adds anything."""
+    found = home_assistant.list_entities(settings.load()["home_assistant"]["url"], home.load_token())
+    if not found.get("ok"):
+        return ha_result(found)
+    q = query.strip().casefold()[:80]
+    rows = []
+    for e in found["entities"]:
+        can_switch = home_control.controllable(e["entity_id"])
+        if purpose == "control" and not can_switch:
+            continue
+        if q and q not in e["entity_id"].casefold() and q not in e["name"].casefold():
+            continue
+        rows.append({**e, "controllable": can_switch})
+    return {"ok": True, "entities": rows[:HA_SHOWN], "matched": len(rows)}
+
+
 def active_name() -> str:
     return characters.name_of(settings.load()["character"]["id"])
 
@@ -324,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"settings": settings.load(), "schema": schema_meta(),
                                     "computer_timezone": settings.computer_timezone(),
                                     "spotify_key": spotify_key_set(),
+                                    "home_assistant_token": home.token_set(),   # whether one is saved, never it
                                     "mac": sys.platform == "darwin",   # apps, music, volume and Shortcuts are Mac only
                                     "config_defaults": defaults_now})
         if url.path == "/launcher/faces":
@@ -378,6 +415,24 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/launcher/settings":
                 new = settings.update(self._body().get("changes", {}))
                 return self._json(200, {"ok": True, "settings": new, "applied_live": reload_brain()})
+            if path == "/launcher/home_assistant/token":
+                # replace or clear the token file; the reply only says whether one is saved
+                body = self._body()
+                try:
+                    if body.get("clear") is True:
+                        home.clear_token()
+                    else:
+                        home.save_token(body.get("token"))
+                except OSError:
+                    return self._json(500, {"error": "couldn't write server/home_assistant.token"})
+                return self._json(200, {"ok": True, "token_set": home.token_set(), "applied_live": reload_brain()})
+            if path == "/launcher/home_assistant/test":
+                result = home_assistant.check_connection(settings.load()["home_assistant"]["url"], home.load_token())
+                return self._json(200, ha_result(result))
+            if path == "/launcher/home_assistant/entities":
+                body = self._body()
+                purpose = "control" if body.get("for") == "control" else "read"
+                return self._json(200, ha_entities(str(body.get("q") or ""), purpose))
             if path == "/launcher/faces/save":
                 body = self._body()
                 pack_id = faces.save_custom(body.get("pack"), str(body.get("id") or "") or None)

@@ -10,7 +10,8 @@ Rocky has two real abilities the model can call (tool use): `look` moves
 the head and comes back with a fresh camera frame from the new angle, and
 `track_face` starts/stops following the human. main.py supplies the
 functions that actually do those things, plus more tools that change while
-running (the computer abilities in computer.py, offered as `extra_tools()`).
+running (the computer abilities in computer.py and the Home Assistant ones in home.py, offered as
+`extra_tools()`).
 Abilities in `quick` that succeed after he has said his line end the reply
 there: no second call to the model just to say "done".
 """
@@ -42,6 +43,7 @@ _SENTENCE_END = re.compile(r"(?<=[!?])\s+|(?<=[^.]\.)(?<!\bMr\.)(?<!\bMrs\.)(?<!
 _REASONING = re.compile(r"\b(?:detectors?|the note|note says|the question is|question is about|the user|"
                         r"my instructions|the instructions say|system prompt|"
                         r"i should (?:look|use|call|check|get|describe|answer))\b", re.IGNORECASE)
+_HOME_CALLS = {"get_home_state", "control_light"}
 
 
 def _thinking_aloud(sentence: str) -> bool:
@@ -147,7 +149,8 @@ def _image_part(jpeg: bytes) -> dict:
 
 class RobotBrain:
     def __init__(self, actions: dict[str, Action] | None = None,
-                 extra_tools: Callable[[], list[dict]] | None = None, quick: set[str] | None = None) -> None:
+                 extra_tools: Callable[[], list[dict]] | None = None, quick: set[str] | None = None,
+                 system_prompt: Callable[[str], str] | None = None) -> None:
         self.client = openai.OpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=os.environ.get("LLM_API_KEY", "missing"),
@@ -167,6 +170,8 @@ class RobotBrain:
         self.actions = actions or {}
         self.extra_tools = extra_tools or (lambda: [])
         self.quick = quick or set()
+        # the character's prompt -> the prompt for this round (home.py adds its rules while its tools are offered)
+        self.system_prompt = system_prompt or (lambda base: base)
         self.emotion = "neutral"        # emotion of the reply in progress
         self._inflight: tuple[int, dict] | None = None  # (index, user message) being answered
 
@@ -258,18 +263,26 @@ class RobotBrain:
 
     def _converse(self, on_emotion: Callable[[str], None] | None, cancelled: threading.Event) -> Iterator[str]:
         """One question, possibly several model calls if it uses its abilities.
-        Yields sentences as they complete."""
+        Yields sentences as they complete.
+
+        A home tool (`get_home_state`, `control_light`) can be preceded by the model narrating its decision. While
+        one is offered, this round's text is held until the stream shows whether a home tool was called; that
+        lead-in stays in the transcript and is not spoken. Other rounds, including quick actions, are spoken as
+        they arrive.
+        """
         nudged = False
         limit = config.REPLY_MAX_SENTENCES
         said = 0                 # sentences spoken so far in this reply, across rounds
         for _ in range(5):
             if cancelled.is_set():
                 raise Interrupted()
+            offered = self.extra_tools() if self.actions else []
+            home_offered = any((t.get("function") or {}).get("name") in _HOME_CALLS for t in offered)
             stream = self.client.chat.completions.create(
                 model=config.MODEL,
                 max_tokens=200,  # backstop; the sentence limit does the real work
-                messages=[{"role": "system", "content": personality.SYSTEM_PROMPT}, *self.history],
-                tools=[*TOOLS, *self.extra_tools()] if self.actions else openai.NOT_GIVEN,
+                messages=[{"role": "system", "content": self.system_prompt(personality.SYSTEM_PROMPT)}, *self.history],
+                tools=[*TOOLS, *offered] if self.actions else openai.NOT_GIVEN,
                 stream=True,
                 extra_body=self._extra,
             )
@@ -279,6 +292,7 @@ class RobotBrain:
             calls: dict[int, dict] = {}
             spoken = 0
             capped = False           # said all he may; still listen for an ability he asks for after it
+            held: list[str] = []     # complete sentences, spoken only if this round does not call a home tool
             try:
                 for chunk in stream:
                     if cancelled.is_set():
@@ -310,8 +324,11 @@ class RobotBrain:
                         s = parts.pop(0).strip()
                         if s and not _thinking_aloud(s):
                             spoken += 1
-                            said += 1
-                            yield s
+                            if home_offered:
+                                held.append(s)
+                            else:
+                                said += 1
+                                yield s
                         if spoken >= limit:
                             break
                     buf = parts[-1] if parts else ""
@@ -327,9 +344,14 @@ class RobotBrain:
                 if on_emotion is not None and (buf.strip() or not calls):
                     on_emotion(self.emotion)
 
+            home_called = any(c["name"] in _HOME_CALLS for c in calls.values())
+            if home_offered and not home_called:
+                for s in held:
+                    said += 1
+                    yield s
             if calls:
-                # He decided to do something: say any lead-in, run it, tell him what happened.
-                if buf.strip() and not _thinking_aloud(buf.strip()):
+                # A quick action says its lead-in. A home tool's lead-in is not spoken; the transcript keeps it.
+                if buf.strip() and not _thinking_aloud(buf.strip()) and not home_called:
                     said += 1
                     yield buf.strip()
                     buf = ""

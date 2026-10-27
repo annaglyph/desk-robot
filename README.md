@@ -504,6 +504,51 @@ accounts):
 
 Without a key he opens Spotify's search for you to pick from.
 
+### Let him check your home
+
+With [Home Assistant](https://www.home-assistant.io/) he can read the
+sensors you list (**"How warm is the pool?"**) and turn the lights you
+list on or off (**"Turn on the desk lamp"**). Off until you set it up in
+Settings > Home Assistant:
+
+1. In Home Assistant, open your profile > **Security** > **Long-lived
+   access tokens** > **Create token**, and copy it.
+2. Tick **Let Rocky use Home Assistant**, type the address (an origin
+   only, like `http://homeassistant.local:8123`), paste the token and
+   press **Save token**, then **Test connection**.
+3. Under **Find an entity**, search and press **Add as reading** or **Add
+   as light**. Give each one the name he will use, in lowercase words
+   joined by underscores (`pool_temperature`); readings are a number (like
+   21.5) or text (like `idle`).
+
+He can read at most 32 entities and switch at most 8, and the two lists are
+separate: a reading never lets him switch anything, and only `light` and
+`switch` entities can be switched. Searching only shows Home Assistant's
+list; nothing is allowed until you press Add. The model only ever sees your
+names, never entity ids, and can't call any other Home Assistant service.
+Every question reads Home Assistant afresh, and he says a light is on or off
+only after Home Assistant shows it. If a name could mean more than one
+thing he asks which. Changes, removals and switching it off apply at once.
+
+The token is kept in `server/home_assistant.token` (git-ignored, readable
+only by your user), not in `settings.json`, and the dashboard never shows it
+again: it only says whether one is saved. **Clear** deletes it.
+
+**Moving from V1.** V2 doesn't read the `HOME_ASSISTANT_*` or `HA_*` keys
+from `server/.env`; if they are there, the server log names them (never
+their values) and you can delete them once copied. Copy them by hand into
+the card: the address and token into the connection fields, then one line
+per entry under **Edit as text** (or add them with **Find an entity**):
+
+| V1 `server/.env` | V2 line |
+|---|---|
+| `HA_POOL_TEMPERATURE=number:sensor.pool_temperature` | Readings: `pool_temperature = number:sensor.pool_temperature` |
+| `HA_PRINTER_STATE=text:sensor.printer_state` | Readings: `printer_state = text:sensor.printer_state` |
+| `HA_CONTROL_DESK_LAMP=light:switch.desk_lamp` | Lights: `desk_lamp = light:switch.desk_lamp` |
+
+The name is the key after `HA_` or `HA_CONTROL_`, in lowercase. A V1 entry
+with no prefix (`HA_X=sensor.y`) is a number: write `x = number:sensor.y`.
+
 ## Make it your own
 
 Everything below is a dashboard setting or a one-file edit. None of it
@@ -730,8 +775,9 @@ cd server && python -m unittest tests/test_*.py
 
 ## Privacy and security
 
-- **Secrets stay in two git-ignored files**: `server/.env` and
-  `firmware/include/secrets.h`. Never commit them, and do not share
+- **Secrets stay in git-ignored files**: `server/.env`,
+  `firmware/include/secrets.h`, and the Home Assistant token in
+  `server/home_assistant.token`. Never commit them, and do not share
   `firmware/.pio/` build output either: the compiled binary contains your
   WiFi password.
 - **Only your robot can talk to the brain.** The WebSocket port is open on
@@ -752,7 +798,9 @@ cd server && python -m unittest tests/test_*.py
   Rocky". All he can do is move his head and spend a fraction of a cent,
   plus, if you switch on computer control, open the sites, apps, music and
   Shortcuts on your lists (no typing, clicking or buying). A Shortcut only
-  runs after he asks and the next thing said to him starts with a yes.
+  runs after he asks and the next thing said to him starts with a yes. With
+  Home Assistant on, anyone can also ask for the readings you listed and
+  switch the lights you listed.
 - **What leaves your computer:** each question sends the transcript, the recent
   conversation, your name from `HUMAN_NAME`, a camera picture and the
   face note (while he's awake; turn "A picture with every question"
@@ -765,6 +813,9 @@ cd server && python -m unittest tests/test_*.py
   Open-Meteo for the weather at the location you set (rounded to about
   1 km); the dashboard's town search sends what you type to Open-Meteo.
   With a Spotify key, "play ..." sends the search words to Spotify.
+  With Home Assistant on, the server talks only to the address you set,
+  and the readings and light states he fetches go to your model provider as
+  part of the conversation.
 - **Camera and microphone:** while the brain is connected the robot streams
   both to it, also while he sleeps on the clock (the camera at 5 frames a
   second, so a wave can wake him; the mic, so his name can). They stop when

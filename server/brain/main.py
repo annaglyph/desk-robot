@@ -45,7 +45,7 @@ import time
 
 import websockets
 
-from . import computer, config, faces, mouth, personality, settings
+from . import computer, config, faces, home, mouth, personality, settings
 from .body import Body
 from .dance import Dancer, length as dance_length
 from .thinking import Interrupted, RobotBrain
@@ -489,6 +489,8 @@ ABILITIES = {
     "dance": _sync(lambda args: dance()),
     # the computer abilities (computer.py) are plain functions: no event loop, nothing sent to the robot
     **{name: (lambda fn: lambda args: (fn(args), None))(fn) for name, fn in computer.ACTIONS.items()},
+    # Home Assistant (home.py): always registered; each refuses a name that isn't allowed right now
+    **home.ACTIONS,
 }
 
 
@@ -518,6 +520,7 @@ def apply_settings(s: dict) -> None:
     config.PERCEPTION = v["perception"]
     config.GESTURE_REACTIONS = v["gestures"]
     computer.controller.configure(s["computer"])
+    home.controller.configure(s["home_assistant"], home.load_token())
     config.CAMERA_STREAM_SIZE = v["stream"]
     if perception is not None:
         perception.enabled = config.PERCEPTION
@@ -1105,6 +1108,7 @@ def console_state() -> dict:
         "tuning": {k: getattr(config, k) for k in TUNABLE},
         "speech": speech_now.snapshot() if speech_now is not None else None,   # his words as he says them
         "computer": computer.controller.status(),
+        "home": home.controller.status(),
     }
 
 
@@ -1480,10 +1484,15 @@ async def main() -> None:
     if not os.environ.get("ROBOT_TOKEN"):
         print("WARNING: ROBOT_TOKEN is not set in server/.env — the robot will be refused")
     global tracker, brain, main_loop, perception, body, dancer
+    ignored = home.ignored_env_keys(os.environ)
+    if ignored:
+        print(f"Home Assistant keys in server/.env are not read in V2 ({', '.join(ignored)}): set Home Assistant up "
+              "in the dashboard's Settings instead")
     apply_settings(settings.load())
     loop = asyncio.get_running_loop()
     main_loop = loop
-    brain = RobotBrain(ABILITIES, extra_tools=lambda: computer.tools(computer.controller), quick=computer.QUICK)
+    brain = RobotBrain(ABILITIES, extra_tools=lambda: [*computer.tools(computer.controller), *home.tools(home.controller)],
+                       quick=computer.QUICK, system_prompt=home.controller.system_prompt)
     tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
     body = Body(send_to_robot, tracker)
     dancer = Dancer(send_to_robot, tracker)
