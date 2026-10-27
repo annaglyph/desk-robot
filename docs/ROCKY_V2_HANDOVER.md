@@ -1,6 +1,6 @@
 # Rocky V2 — development handover
 
-Wi-Fi provisioning on the V2 robot (XIAO ESP32-S3 Sense) is closed at the Stage 3B.1 checkpoint. Resume from [Next development focus](#next-development-focus).
+Wi-Fi provisioning on the V2 robot (XIAO ESP32-S3 Sense) is closed at the Stage 3B.1 checkpoint. Home Assistant V2 is complete and pushed (`7407574`). The next development task is undecided; see [Next development focus](#next-development-focus).
 
 Repository: `/Users/rus/Development/Python/desk-robot-v2`. The V1 tree (`/Users/rus/Development/Python/desk-robot`) is a different project and stays separate.
 
@@ -219,17 +219,10 @@ Left local on purpose. Not part of `93ab27f` or the Stage 3B.1 commit. Do not de
 
 ## Next development focus
 
-Wi-Fi work is closed. The next phase is **awake idle personality and natural head movement**. Do not start it from this note alone. Plan it after reading Casey's existing "Look around" sleep animation, then implement only what that session asks for.
+Wi-Fi work is closed. Home Assistant V2 is complete and pushed: commit `7407574` on `origin/v2-dev` (*Add Home Assistant read and light control*). The record is [HOME_ASSISTANT_V2_PLAN.md](HOME_ASSISTANT_V2_PLAN.md), and the wider status is [FUTURE_DEVELOPMENT.md](FUTURE_DEVELOPMENT.md).
 
-The aim is to reuse that sleep animation as the starting point for how Rocky moves while he is awake and idle.
+The next development task is undecided. Do not start one from this note.
 
-Possible goals:
-
-- Natural, subtle head movements while awake and idle.
-- Configurable Calm, Curious, and Lively personalities.
-- Movement that yields at once to face tracking, conversation, manual servo control, and sleep.
-- Stay inside the calibrated servo limits and movement speeds.
-- Avoid servo chatter and movement that never rests.
-- Leave the existing sleep behaviour as it is.
+Awake idle personality, including Calm, Curious and Lively, was considered and is not being pursued. That decision is recorded in [FUTURE_DEVELOPMENT.md](FUTURE_DEVELOPMENT.md). Casey's "Look around" roaming idle screen already runs while Rocky is asleep. It is not a starting point for new awake movement.
 
 Known Wi-Fi limit to leave alone unless it becomes a problem: Rocky does not automatically retry saved networks once the setup portal is already active.
